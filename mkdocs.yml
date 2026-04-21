@@ -1,0 +1,37 @@
+site_name: e2ee-backend-adapter
+site_description: Documentation for the e2ee-backend-adapter Rust crate and REST runtime
+repo_url: https://github.com/benedikt-weyer/e2ee-backend-adapter
+repo_name: benedikt-weyer/e2ee-backend-adapter
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: blue
+      accent: blue
+
+nav:
+  - Overview: index.md
+  - User Guide:
+      - Getting Started: user/getting-started.md
+      - Schema Manifest: user/schema-manifest.md
+      - Database Tooling: user/database-tooling.md
+  - Developer Guide:
+      - Architecture: developer/architecture.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences

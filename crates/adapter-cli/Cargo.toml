@@ -1,0 +1,12 @@
+[package]
+name = "e2ee-backend-adapter-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+e2ee-backend-adapter-core = { path = "../adapter-core" }
+serde_json.workspace = true
+tokio.workspace = true

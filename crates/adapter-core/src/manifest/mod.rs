@@ -1,0 +1,297 @@
+use anyhow::{anyhow, bail, Result};
+use serde::{Deserialize, Serialize};
+
+pub const MANIFEST_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendAdapterManifest {
+    pub auth: AuthManifest,
+    pub database: DatabaseManifest,
+    pub entities: Vec<EntityManifest>,
+    pub name: String,
+    pub realtime: Option<RealtimeManifest>,
+    pub version: u32,
+}
+
+impl BackendAdapterManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.version != MANIFEST_VERSION {
+            bail!(
+                "Unsupported backend adapter manifest version {}. Expected {}.",
+                self.version,
+                MANIFEST_VERSION,
+            );
+        }
+
+        if self.name.trim().is_empty() {
+            bail!("Manifest name must not be empty.");
+        }
+
+        if self.entities.is_empty() {
+            bail!("Manifest must define at least one entity.");
+        }
+
+        for entity in &self.entities {
+            entity.validate()?;
+        }
+
+        self.auth.validate()?;
+        self.database.validate()?;
+
+        if let Some(realtime) = &self.realtime {
+            realtime.validate()?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthManifest {
+    pub mode: String,
+    pub rest: RestAuthManifest,
+    pub session: SessionManifest,
+}
+
+impl AuthManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.mode.trim().is_empty() {
+            bail!("Auth mode must not be empty.");
+        }
+
+        self.rest.validate()?;
+        self.session.validate()?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestAuthManifest {
+    pub paths: RestAuthPaths,
+}
+
+impl RestAuthManifest {
+    pub fn validate(&self) -> Result<()> {
+        self.paths.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestAuthPaths {
+    pub get_kdf_salt: String,
+    pub login: String,
+    pub logout: String,
+    pub refresh: String,
+    pub register_begin: String,
+    pub register_complete: String,
+}
+
+impl RestAuthPaths {
+    pub fn validate(&self) -> Result<()> {
+        for path in [
+            &self.get_kdf_salt,
+            &self.login,
+            &self.logout,
+            &self.refresh,
+            &self.register_begin,
+            &self.register_complete,
+        ] {
+            if !path.starts_with('/') {
+                bail!("REST auth paths must start with '/'. Invalid path: {}", path);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionManifest {
+    pub cookie_names: SessionCookieNames,
+    pub refresh_duration_seconds: u64,
+    pub session_duration_seconds: u64,
+}
+
+impl SessionManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.session_duration_seconds == 0 {
+            bail!("Session duration must be greater than zero.");
+        }
+        if self.refresh_duration_seconds == 0 {
+            bail!("Refresh duration must be greater than zero.");
+        }
+        self.cookie_names.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCookieNames {
+    pub refresh: String,
+    pub session: String,
+}
+
+impl SessionCookieNames {
+    pub fn validate(&self) -> Result<()> {
+        if self.session.trim().is_empty() || self.refresh.trim().is_empty() {
+            bail!("Cookie names must not be empty.");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseManifest {
+    pub engine: String,
+    pub expected_schema: ExpectedSchemaManifest,
+}
+
+impl DatabaseManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.engine != "postgres" {
+            bail!("Only postgres is supported in v1.");
+        }
+        self.expected_schema.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedSchemaManifest {
+    pub auth_tables: Vec<String>,
+    pub entity_tables: Vec<ExpectedEntityTableManifest>,
+}
+
+impl ExpectedSchemaManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.auth_tables.is_empty() {
+            bail!("Expected schema must define auth tables.");
+        }
+        if self.entity_tables.is_empty() {
+            bail!("Expected schema must define entity tables.");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedEntityTableManifest {
+    pub primary_key: String,
+    pub table_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityManifest {
+    pub fields: Vec<EntityFieldManifest>,
+    pub id_path: String,
+    pub name: String,
+    pub rest: EntityRestManifest,
+    pub table_name: String,
+}
+
+impl EntityManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            bail!("Entity name must not be empty.");
+        }
+        if self.id_path.trim().is_empty() {
+            bail!("Entity id_path must not be empty.");
+        }
+        if self.fields.is_empty() {
+            bail!("Entity '{}' must define at least one field.", self.name);
+        }
+        self.rest.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityRestManifest {
+    pub allow_create: bool,
+    pub allow_delete: bool,
+    pub allow_get_by_id: bool,
+    pub allow_list: bool,
+    pub allow_update: bool,
+    pub base_path: String,
+}
+
+impl EntityRestManifest {
+    pub fn validate(&self) -> Result<()> {
+        if !self.base_path.starts_with('/') {
+            bail!("Entity REST base_path must start with '/'.");
+        }
+
+        if !(self.allow_create
+            || self.allow_delete
+            || self.allow_get_by_id
+            || self.allow_list
+            || self.allow_update)
+        {
+            bail!("Entity REST manifest must enable at least one operation.");
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityFieldManifest {
+    pub encrypted: bool,
+    pub entity_path: String,
+    pub entity_type: String,
+    pub nullable: bool,
+    pub optional: bool,
+    pub remote_path: String,
+    pub remote_type: String,
+    pub strategy_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeManifest {
+    pub entities: Vec<RealtimeEntityManifest>,
+    pub path: String,
+    pub protocol: String,
+}
+
+impl RealtimeManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.protocol != "websocket" {
+            bail!("Only websocket realtime is supported in v1.");
+        }
+        if !self.path.starts_with('/') {
+            bail!("Realtime path must start with '/'.");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeEntityManifest {
+    pub entity_name: String,
+    pub topic: String,
+}
+
+pub fn parse_manifest(json: &str) -> Result<BackendAdapterManifest> {
+    let manifest: BackendAdapterManifest = serde_json::from_str(json)?;
+    manifest.validate()?;
+    Ok(manifest)
+}
+
+pub fn expected_schema_to_pretty_json(manifest: &BackendAdapterManifest) -> Result<String> {
+    if manifest.database.expected_schema.entity_tables.is_empty() {
+        return Err(anyhow!("Manifest does not define entity table expectations."));
+    }
+
+    Ok(serde_json::to_string_pretty(&manifest.database.expected_schema)?)
+}
