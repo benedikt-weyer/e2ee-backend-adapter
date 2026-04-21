@@ -16,3 +16,16 @@ e2ee-backend-adapter-server \
 ```
 
 The current scaffold validates the manifest, connects to PostgreSQL, and exposes generated route placeholders plus adapter metadata endpoints.
+
+For database verification workflows, use the CLI:
+
+```bash
+e2ee-backend-adapter-cli export-expected-schema \
+  --manifest ./generated/e2ee-backend.manifest.json \
+  --out ./generated/expected-schema.json
+
+e2ee-backend-adapter-cli diff \
+  --manifest ./generated/e2ee-backend.manifest.json \
+  --database-url postgres://postgres:postgres@localhost:5432/app \
+  --out ./generated/schema-diff.json
+```

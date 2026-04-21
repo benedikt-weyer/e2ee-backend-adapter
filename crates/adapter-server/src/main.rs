@@ -2,7 +2,11 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use e2ee_backend_adapter_core::{manifest::parse_manifest, AdapterRuntime};
+use e2ee_backend_adapter_core::{
+    manifest::parse_manifest,
+    AdapterRuntime,
+    AdapterRuntimeOptions,
+};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
@@ -17,6 +21,9 @@ struct Args {
 
     #[arg(long, env = "E2EE_ADAPTER_MANIFEST")]
     manifest: PathBuf,
+
+    #[arg(long, default_value_t = false, env = "E2EE_ADAPTER_SECURE_COOKIES")]
+    secure_cookies: bool,
 }
 
 #[tokio::main]
@@ -29,7 +36,14 @@ async fn main() -> Result<()> {
     let manifest_json = std::fs::read_to_string(&args.manifest)
         .with_context(|| format!("Failed to read manifest file at {}", args.manifest.display()))?;
     let manifest = parse_manifest(&manifest_json)?;
-    let runtime = AdapterRuntime::from_manifest(manifest, &args.database_url).await?;
+    let runtime = AdapterRuntime::from_manifest_with_options(
+        manifest,
+        &args.database_url,
+        AdapterRuntimeOptions {
+            secure_cookies: args.secure_cookies,
+        },
+    )
+    .await?;
     runtime.verify_database().await?;
 
     let router = runtime

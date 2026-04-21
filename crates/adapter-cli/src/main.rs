@@ -17,6 +17,8 @@ struct Args {
 #[derive(Debug, Subcommand)]
 enum Command {
     Diff {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
         #[arg(long)]
         manifest: PathBuf,
         #[arg(long)]
@@ -39,9 +41,13 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Command::Diff { manifest, out } => {
+        Command::Diff {
+            database_url,
+            manifest,
+            out,
+        } => {
             let manifest = load_manifest(&manifest)?;
-            let diff = diff_database_against_manifest(&manifest).await?;
+            let diff = diff_database_against_manifest(&manifest, &database_url).await?;
             fs::write(out, diff)?;
         }
         Command::ExportExpectedSchema { manifest, out } => {

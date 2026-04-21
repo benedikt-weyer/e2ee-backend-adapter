@@ -1,5 +1,6 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
+    http::HeaderMap,
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -8,7 +9,21 @@ use axum::{
 use serde::Serialize;
 
 use crate::{
-    auth::AuthRouteSummary,
+    auth::{
+        attach_cookies,
+        get_kdf_salt,
+        login,
+        logout,
+        refresh,
+        register_begin,
+        register_complete,
+        AuthError,
+        AuthKeyBody,
+        AuthRouteSummary,
+        EmailBody,
+        EmailQuery,
+        KdfSaltResponse,
+    },
     db::DatabaseBackend,
     manifest::{BackendAdapterManifest, EntityManifest},
     AdapterRuntimeState,
@@ -42,29 +57,28 @@ pub fn build_router(state: AdapterRuntimeState) -> Router {
     let mut router = Router::new()
         .route("/health", get(health))
         .route("/adapter/manifest", get(get_manifest))
-        .route("/adapter/runtime", get(runtime_summary))
-        .with_state(state.clone());
+        .route("/adapter/runtime", get(runtime_summary));
 
     router = add_auth_routes(router, manifest.as_ref());
 
     for entity in &manifest.entities {
-        router = router.nest(&entity.rest.base_path, entity_router(entity.clone(), state.clone()));
+        router = router.nest(&entity.rest.base_path, entity_router(entity.clone()));
     }
 
-    router
+    router.with_state(state)
 }
 
-fn add_auth_routes(router: Router, manifest: &BackendAdapterManifest) -> Router {
+fn add_auth_routes(router: Router<AdapterRuntimeState>, manifest: &BackendAdapterManifest) -> Router<AdapterRuntimeState> {
     router
-        .route(&manifest.auth.rest.paths.get_kdf_salt, get(auth_placeholder))
-        .route(&manifest.auth.rest.paths.login, post(auth_placeholder))
-        .route(&manifest.auth.rest.paths.logout, post(auth_placeholder))
-        .route(&manifest.auth.rest.paths.refresh, post(auth_placeholder))
-        .route(&manifest.auth.rest.paths.register_begin, post(auth_placeholder))
-        .route(&manifest.auth.rest.paths.register_complete, post(auth_placeholder))
+    .route(&manifest.auth.rest.paths.get_kdf_salt, get(get_kdf_salt_handler))
+    .route(&manifest.auth.rest.paths.login, post(login_handler))
+    .route(&manifest.auth.rest.paths.logout, post(logout_handler))
+    .route(&manifest.auth.rest.paths.refresh, post(refresh_handler))
+    .route(&manifest.auth.rest.paths.register_begin, post(register_begin_handler))
+    .route(&manifest.auth.rest.paths.register_complete, post(register_complete_handler))
 }
 
-fn entity_router(entity: EntityManifest, state: AdapterRuntimeState) -> Router {
+fn entity_router(entity: EntityManifest) -> Router<AdapterRuntimeState> {
     let mut router = Router::new();
 
     if entity.rest.allow_list {
@@ -83,18 +97,77 @@ fn entity_router(entity: EntityManifest, state: AdapterRuntimeState) -> Router {
         router = router.route("/{id}", delete(delete_placeholder));
     }
 
-    router.with_state(state)
+    router
 }
 
-async fn auth_placeholder() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(PlaceholderResponse {
-            entity: None,
-            message: "Auth route generation is scaffolded but not implemented yet.",
-            operation: "auth".to_owned(),
-        }),
+async fn get_kdf_salt_handler(
+    Query(query): Query<EmailQuery>,
+    State(state): State<AdapterRuntimeState>,
+) -> Result<Json<KdfSaltResponse>, AuthError> {
+    Ok(Json(get_kdf_salt(state.database.pool(), &query.email).await?))
+}
+
+async fn login_handler(
+    State(state): State<AdapterRuntimeState>,
+    Json(body): Json<AuthKeyBody>,
+) -> Result<impl IntoResponse, AuthError> {
+    let result = login(
+        state.database.pool(),
+        body,
+        &state.manifest.auth.session,
+        state.secure_cookies,
     )
+    .await?;
+    Ok(attach_cookies(result.payload, result.cookies))
+}
+
+async fn logout_handler(
+    headers: HeaderMap,
+    State(state): State<AdapterRuntimeState>,
+) -> Result<impl IntoResponse, AuthError> {
+    let cookies = logout(
+        &headers,
+        state.database.pool(),
+        &state.manifest.auth.session,
+        state.secure_cookies,
+    )
+    .await?;
+    Ok(attach_cookies(true, cookies))
+}
+
+async fn refresh_handler(
+    headers: HeaderMap,
+    State(state): State<AdapterRuntimeState>,
+) -> Result<impl IntoResponse, AuthError> {
+    let result = refresh(
+        &headers,
+        state.database.pool(),
+        &state.manifest.auth.session,
+        state.secure_cookies,
+    )
+    .await?;
+    Ok(attach_cookies(result.payload, result.cookies))
+}
+
+async fn register_begin_handler(
+    State(state): State<AdapterRuntimeState>,
+    Json(body): Json<EmailBody>,
+) -> Result<Json<KdfSaltResponse>, AuthError> {
+    Ok(Json(register_begin(state.database.pool(), body).await?))
+}
+
+async fn register_complete_handler(
+    State(state): State<AdapterRuntimeState>,
+    Json(body): Json<AuthKeyBody>,
+) -> Result<impl IntoResponse, AuthError> {
+    let result = register_complete(
+        state.database.pool(),
+        body,
+        &state.manifest.auth.session,
+        state.secure_cookies,
+    )
+    .await?;
+    Ok(attach_cookies(result.payload, result.cookies))
 }
 
 async fn create_placeholder() -> impl IntoResponse {

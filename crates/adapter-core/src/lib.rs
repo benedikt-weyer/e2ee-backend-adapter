@@ -11,10 +11,16 @@ use axum::Router;
 use db::{DatabaseBackend, PostgresBackend};
 use manifest::BackendAdapterManifest;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AdapterRuntimeOptions {
+    pub secure_cookies: bool,
+}
+
 #[derive(Clone)]
 pub struct AdapterRuntimeState {
     pub database: Arc<PostgresBackend>,
     pub manifest: Arc<BackendAdapterManifest>,
+    pub secure_cookies: bool,
 }
 
 pub struct AdapterRuntime {
@@ -26,6 +32,15 @@ impl AdapterRuntime {
         manifest: BackendAdapterManifest,
         database_url: &str,
     ) -> Result<Self> {
+        Self::from_manifest_with_options(manifest, database_url, AdapterRuntimeOptions::default())
+            .await
+    }
+
+    pub async fn from_manifest_with_options(
+        manifest: BackendAdapterManifest,
+        database_url: &str,
+        options: AdapterRuntimeOptions,
+    ) -> Result<Self> {
         manifest.validate()?;
         let database = PostgresBackend::connect(database_url).await?;
 
@@ -33,6 +48,7 @@ impl AdapterRuntime {
             state: AdapterRuntimeState {
                 database: Arc::new(database),
                 manifest: Arc::new(manifest),
+                secure_cookies: options.secure_cookies,
             },
         })
     }
