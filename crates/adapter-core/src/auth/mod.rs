@@ -677,3 +677,98 @@ impl From<DbUserRecord> for AuthenticatedUser {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        attach_cookies, build_cookie, hash_auth_key_material, normalize_email, read_cookie,
+        session_cookie_headers, verify_auth_key_material, AuthPayload,
+    };
+    use axum::response::IntoResponse;
+    use crate::manifest::{SessionCookieNames, SessionManifest};
+    use axum::http::{header::SET_COOKIE, HeaderMap};
+
+    fn session_manifest() -> SessionManifest {
+        SessionManifest {
+            cookie_names: SessionCookieNames {
+                refresh: "refresh_token".to_owned(),
+                session: "session_token".to_owned(),
+            },
+            refresh_duration_seconds: 120,
+            session_duration_seconds: 60,
+        }
+    }
+
+    #[test]
+    fn normalize_email_trims_and_lowercases() {
+        let normalized = normalize_email("  User@Example.COM ").expect("email should normalize");
+
+        assert_eq!(normalized, "user@example.com");
+    }
+
+    #[test]
+    fn normalize_email_rejects_invalid_values() {
+        let error = normalize_email("not-an-email").expect_err("invalid email should fail");
+
+        assert_eq!(error.into_response().status().as_u16(), 400);
+    }
+
+    #[test]
+    fn password_hash_round_trip_verifies() {
+        let material = b"secret-material";
+        let hash = hash_auth_key_material(material).expect("hashing should succeed");
+
+        assert!(verify_auth_key_material(material, &hash));
+        assert!(!verify_auth_key_material(b"wrong-material", &hash));
+    }
+
+    #[test]
+    fn read_cookie_extracts_named_cookie() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            "foo=bar; session_token=abc123; refresh_token=def456"
+                .parse()
+                .expect("cookie header should parse"),
+        );
+
+        let cookie = read_cookie(&headers, "session_token");
+
+        assert_eq!(cookie.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn session_cookie_headers_use_manifest_names_and_secure_flag() {
+        let headers = session_cookie_headers("sess", "ref", &session_manifest(), true)
+            .expect("cookie headers should build");
+        let values = headers
+            .iter()
+            .map(|value| value.to_str().expect("header should be utf-8"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(values.len(), 2);
+        assert!(values[0].contains("session_token=sess"));
+        assert!(values[0].contains("Secure"));
+        assert!(values[1].contains("refresh_token=ref"));
+    }
+
+    #[test]
+    fn attach_cookies_appends_set_cookie_headers() {
+        let cookie = build_cookie("session_token", "sess", std::time::Duration::from_secs(60), false)
+            .expect("cookie should build");
+        let response = attach_cookies(
+            AuthPayload {
+                ok: true,
+                message: None,
+                user: None,
+            },
+            vec![cookie],
+        );
+
+        let cookie_headers = response.headers().get_all(SET_COOKIE);
+        let values = cookie_headers.iter().collect::<Vec<_>>();
+
+        assert_eq!(values.len(), 1);
+        assert_eq!(response.status().as_u16(), 200);
+    }
+}

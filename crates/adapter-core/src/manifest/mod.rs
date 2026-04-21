@@ -295,3 +295,183 @@ pub fn expected_schema_to_pretty_json(manifest: &BackendAdapterManifest) -> Resu
 
     Ok(serde_json::to_string_pretty(&manifest.database.expected_schema)?)
 }
+
+#[cfg(test)]
+mod tests {
+        use super::{
+                expected_schema_to_pretty_json, parse_manifest, AuthManifest, BackendAdapterManifest,
+                DatabaseManifest, EntityFieldManifest, EntityManifest, EntityRestManifest,
+                ExpectedEntityTableManifest, ExpectedSchemaManifest, MANIFEST_VERSION, RealtimeManifest,
+                RealtimeEntityManifest, RestAuthManifest, RestAuthPaths, SessionCookieNames,
+                SessionManifest,
+        };
+
+        fn manifest() -> BackendAdapterManifest {
+                BackendAdapterManifest {
+                        auth: AuthManifest {
+                                mode: "password-session".to_owned(),
+                                rest: RestAuthManifest {
+                                        paths: RestAuthPaths {
+                                                get_kdf_salt: "/auth/kdf-salt".to_owned(),
+                                                login: "/auth/login".to_owned(),
+                                                logout: "/auth/logout".to_owned(),
+                                                refresh: "/auth/refresh".to_owned(),
+                                                register_begin: "/auth/register-begin".to_owned(),
+                                                register_complete: "/auth/register-complete".to_owned(),
+                                        },
+                                },
+                                session: SessionManifest {
+                                        cookie_names: SessionCookieNames {
+                                                refresh: "refresh_cookie".to_owned(),
+                                                session: "session_cookie".to_owned(),
+                                        },
+                                        refresh_duration_seconds: 3600,
+                                        session_duration_seconds: 600,
+                                },
+                        },
+                        database: DatabaseManifest {
+                                engine: "postgres".to_owned(),
+                                expected_schema: ExpectedSchemaManifest {
+                                        auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                                        entity_tables: vec![ExpectedEntityTableManifest {
+                                                primary_key: "id".to_owned(),
+                                                table_name: "notes".to_owned(),
+                                        }],
+                                },
+                        },
+                        entities: vec![EntityManifest {
+                                fields: vec![EntityFieldManifest {
+                                        encrypted: true,
+                                        entity_path: "content".to_owned(),
+                                        entity_type: "string".to_owned(),
+                                        nullable: false,
+                                        optional: false,
+                                        remote_path: "ciphertext".to_owned(),
+                                        remote_type: "string".to_owned(),
+                                        strategy_id: Some("aes-256-gcm".to_owned()),
+                                }],
+                                id_path: "id".to_owned(),
+                                name: "note".to_owned(),
+                                rest: EntityRestManifest {
+                                        allow_create: true,
+                                        allow_delete: true,
+                                        allow_get_by_id: true,
+                                        allow_list: true,
+                                        allow_update: true,
+                                        base_path: "/entities/note".to_owned(),
+                                },
+                                table_name: "notes".to_owned(),
+                        }],
+                        name: "notes-service".to_owned(),
+                        realtime: Some(RealtimeManifest {
+                                entities: vec![RealtimeEntityManifest {
+                                        entity_name: "note".to_owned(),
+                                        topic: "notes".to_owned(),
+                                }],
+                                path: "/ws/realtime".to_owned(),
+                                protocol: "websocket".to_owned(),
+                        }),
+                        version: MANIFEST_VERSION,
+                }
+        }
+
+        #[test]
+        fn parse_manifest_accepts_camel_case_json() {
+                let json = r#"
+                {
+                    "version": 1,
+                    "name": "notes-service",
+                    "auth": {
+                        "mode": "password-session",
+                        "rest": {
+                            "paths": {
+                                "getKdfSalt": "/auth/kdf-salt",
+                                "login": "/auth/login",
+                                "logout": "/auth/logout",
+                                "refresh": "/auth/refresh",
+                                "registerBegin": "/auth/register-begin",
+                                "registerComplete": "/auth/register-complete"
+                            }
+                        },
+                        "session": {
+                            "cookieNames": {
+                                "refresh": "refresh_cookie",
+                                "session": "session_cookie"
+                            },
+                            "refreshDurationSeconds": 3600,
+                            "sessionDurationSeconds": 600
+                        }
+                    },
+                    "database": {
+                        "engine": "postgres",
+                        "expectedSchema": {
+                            "authTables": ["users", "sessions"],
+                            "entityTables": [
+                                {
+                                    "primaryKey": "id",
+                                    "tableName": "notes"
+                                }
+                            ]
+                        }
+                    },
+                    "entities": [
+                        {
+                            "fields": [
+                                {
+                                    "encrypted": true,
+                                    "entityPath": "content",
+                                    "entityType": "string",
+                                    "nullable": false,
+                                    "optional": false,
+                                    "remotePath": "ciphertext",
+                                    "remoteType": "string",
+                                    "strategyId": "aes-256-gcm"
+                                }
+                            ],
+                            "idPath": "id",
+                            "name": "note",
+                            "rest": {
+                                "allowCreate": true,
+                                "allowDelete": true,
+                                "allowGetById": true,
+                                "allowList": true,
+                                "allowUpdate": true,
+                                "basePath": "/entities/note"
+                            },
+                            "tableName": "notes"
+                        }
+                    ],
+                    "realtime": {
+                        "entities": [{ "entityName": "note", "topic": "notes" }],
+                        "path": "/ws/realtime",
+                        "protocol": "websocket"
+                    }
+                }
+                "#;
+
+                let parsed = parse_manifest(json).expect("manifest should parse");
+
+                assert_eq!(parsed.name, "notes-service");
+                assert_eq!(parsed.entities[0].rest.base_path, "/entities/note");
+                assert_eq!(parsed.auth.session.cookie_names.session, "session_cookie");
+        }
+
+        #[test]
+        fn validate_rejects_unsupported_version() {
+                let mut invalid = manifest();
+                invalid.version = 99;
+
+                let error = invalid.validate().expect_err("manifest should be rejected");
+
+                assert!(error.to_string().contains("Unsupported backend adapter manifest version"));
+        }
+
+        #[test]
+        fn expected_schema_export_is_pretty_json() {
+                let json = expected_schema_to_pretty_json(&manifest()).expect("schema export should succeed");
+
+                assert!(json.contains("\n"));
+                assert!(json.contains("\"authTables\""));
+                assert!(json.contains("\"tableName\": \"notes\""));
+        }
+}

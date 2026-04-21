@@ -55,3 +55,50 @@ async fn main() -> Result<()> {
     axum::serve(listener, router).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::Parser;
+    use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf};
+
+    #[test]
+    fn parses_required_server_arguments() {
+        let args = Args::try_parse_from([
+            "adapter-server",
+            "--database-url",
+            "postgres://postgres:postgres@localhost:5432/app",
+            "--manifest",
+            "/tmp/manifest.json",
+        ])
+        .expect("arguments should parse");
+
+        assert_eq!(
+            args.bind,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080),
+        );
+        assert_eq!(args.manifest, PathBuf::from("/tmp/manifest.json"));
+        assert!(!args.secure_cookies);
+    }
+
+    #[test]
+    fn parses_explicit_bind_and_secure_cookie_flag() {
+        let args = Args::try_parse_from([
+            "adapter-server",
+            "--database-url",
+            "postgres://postgres:postgres@localhost:5432/app",
+            "--manifest",
+            "/tmp/manifest.json",
+            "--bind",
+            "0.0.0.0:9090",
+            "--secure-cookies",
+        ])
+        .expect("arguments should parse");
+
+        assert_eq!(
+            args.bind,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9090),
+        );
+        assert!(args.secure_cookies);
+    }
+}
