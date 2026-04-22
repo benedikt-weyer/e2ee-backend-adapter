@@ -2,11 +2,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use e2ee_backend_adapter_core::{
-    manifest::parse_manifest,
-    AdapterRuntime,
-    AdapterRuntimeOptions,
-};
+use e2ee_backend_adapter::{manifest::parse_manifest, AdapterRuntime, AdapterRuntimeOptions};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
@@ -60,7 +56,10 @@ async fn main() -> Result<()> {
 mod tests {
     use super::Args;
     use clap::Parser;
-    use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf};
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        path::PathBuf,
+    };
 
     #[test]
     fn parses_required_server_arguments() {

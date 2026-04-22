@@ -6,8 +6,42 @@ It is intended to run the REST server itself, connect to the configured PostgreS
 
 The current implementation bootstraps:
 
-- a Rust workspace with core, server, and CLI crates
+- a Rust workspace with the main adapter crate and an internal CLI crate
 - a versioned manifest contract on the Rust side
 - a server that validates the manifest and verifies PostgreSQL connectivity
 - CLI commands for manifest validation and expected-schema export scaffolding
 - MkDocs documentation pages
+
+## Release
+
+The main `e2ee-backend-adapter` crate is versioned and published from this workspace for crates.io.
+
+Compute the next version:
+
+```bash
+bash ./scripts/next-version.sh patch
+```
+
+Update the workspace release version:
+
+```bash
+bash ./scripts/set-version.sh 0.1.1
+```
+
+Publish the crates.io package:
+
+```bash
+bash ./scripts/publish-crates.sh
+```
+
+GitHub Actions workflow:
+
+- `.github/workflows/release-crates.yml`
+- manual trigger with `patch`, `minor`, or `major`
+- expects `CARGO_REGISTRY_TOKEN` or `CRATES_IO_TOKEN` in repository secrets
+
+Dry-run the publish flow:
+
+```bash
+bash ./scripts/publish-crates.sh --dry-run
+```

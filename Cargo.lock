@@ -432,18 +432,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
-name = "e2ee-backend-adapter-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "e2ee-backend-adapter-core",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "e2ee-backend-adapter-core"
+name = "e2ee-backend-adapter"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -451,6 +440,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "clap",
  "hex",
  "rand 0.8.6",
  "serde",
@@ -458,22 +448,21 @@ dependencies = [
  "sha2",
  "sqlx",
  "tokio",
+ "tower-http",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
 [[package]]
-name = "e2ee-backend-adapter-server"
+name = "e2ee-backend-adapter-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "axum",
  "clap",
- "e2ee-backend-adapter-core",
+ "e2ee-backend-adapter",
+ "serde_json",
  "tokio",
- "tower-http",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

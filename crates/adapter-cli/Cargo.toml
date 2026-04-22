@@ -1,12 +1,17 @@
 [package]
 name = "e2ee-backend-adapter-cli"
+description = "CLI tooling for validating and publishing e2ee-backend-adapter manifests"
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
+publish = false
+readme = "../../README.md"
+repository.workspace = true
 version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-e2ee-backend-adapter-core = { path = "../adapter-core" }
+e2ee-backend-adapter.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

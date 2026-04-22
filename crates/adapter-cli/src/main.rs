@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use e2ee_backend_adapter_core::{
+use e2ee_backend_adapter::{
     manifest::parse_manifest,
     schema::{diff::diff_database_against_manifest, export::export_expected_schema},
 };
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn load_manifest(path: &PathBuf) -> Result<e2ee_backend_adapter_core::manifest::BackendAdapterManifest> {
+fn load_manifest(path: &PathBuf) -> Result<e2ee_backend_adapter::manifest::BackendAdapterManifest> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read manifest file at {}", path.display()))?;
     parse_manifest(&content)
