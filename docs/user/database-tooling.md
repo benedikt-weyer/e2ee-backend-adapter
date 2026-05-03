@@ -27,6 +27,12 @@ The exported shape is:
 {
 	"expectedSchema": {
 		"api": {
+			"rest": {
+				"baseUrl": "/api",
+				"defaultHeaders": {
+					"accept": "application/json"
+				}
+			},
 			"type": "rest"
 		},
 		"authTables": ["users", "sessions"],
@@ -83,6 +89,7 @@ The exported shape is:
 This describes:
 
 - the API family this generated schema targets
+- the default REST transport base URL and headers exported for generated clients
 - auth-related tables the adapter expects to exist
 - entity tables the adapter expects to exist
 - the expected primary key field for each entity table
@@ -103,12 +110,14 @@ The generated TypeScript module exports:
 
 - `SessionUser`
 - `<EntityName>Entity`, `<EntityName>RemoteRecord`, and `<EntityName>Id` type aliases
+- `createRestTransport(...)`
 - `createRestAuthConfig(...)`
 - `createEntitySchemas(...)`
 - `createRestCrudAdapters(...)`
 
 That lets a client app import typed auth and model helpers directly instead of
-rewriting `SessionUser`, entity types, or REST route wiring by hand.
+rewriting `SessionUser`, entity types, REST route wiring, or default transport
+configuration by hand.
 
 Example output file:
 
@@ -116,6 +125,12 @@ Example output file:
 {
 	"expectedSchema": {
 		"api": {
+			"rest": {
+				"baseUrl": "/api",
+				"defaultHeaders": {
+					"accept": "application/json"
+				}
+			},
 			"type": "rest"
 		},
 		"authTables": ["users", "sessions"],

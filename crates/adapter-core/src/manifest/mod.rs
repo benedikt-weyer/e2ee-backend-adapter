@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
@@ -189,6 +191,7 @@ impl ExpectedSchemaManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaApiManifest {
+    pub rest: ExpectedSchemaRestApiManifest,
     #[serde(rename = "type")]
     pub api_type: String,
 }
@@ -197,6 +200,26 @@ impl ExpectedSchemaApiManifest {
     pub fn validate(&self) -> Result<()> {
         if self.api_type != "rest" {
             bail!("Only REST generated schema APIs are supported in v1.");
+        }
+
+        self.rest.validate()?;
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedSchemaRestApiManifest {
+    pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_headers: Option<BTreeMap<String, String>>,
+}
+
+impl ExpectedSchemaRestApiManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.base_url.trim().is_empty() {
+            bail!("Expected schema REST base_url must not be empty.");
         }
 
         Ok(())
@@ -350,10 +373,13 @@ pub fn expected_schema_to_pretty_json(manifest: &BackendAdapterManifest) -> Resu
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
         use super::{
             expected_schema_to_pretty_json, parse_manifest, AuthManifest,
             BackendAdapterManifest, DatabaseManifest, EntityFieldManifest, EntityManifest,
             EntityRestManifest, ExpectedEntityTableManifest, ExpectedSchemaApiManifest,
+            ExpectedSchemaRestApiManifest,
             ExpectedSchemaEntityApiManifest, ExpectedSchemaEntityManifest,
             ExpectedSchemaManifest, MANIFEST_VERSION, RealtimeManifest,
                 RealtimeEntityManifest, RestAuthManifest, RestAuthPaths, SessionCookieNames,
@@ -387,6 +413,13 @@ mod tests {
                                 engine: "postgres".to_owned(),
                                 expected_schema: ExpectedSchemaManifest {
                                         api: ExpectedSchemaApiManifest {
+                                            rest: ExpectedSchemaRestApiManifest {
+                                                base_url: "/api".to_owned(),
+                                                default_headers: Some(BTreeMap::from([(
+                                                    "accept".to_owned(),
+                                                    "application/json".to_owned(),
+                                                )])),
+                                            },
                                             api_type: "rest".to_owned(),
                                         },
                                         auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
@@ -490,6 +523,12 @@ mod tests {
                         "engine": "postgres",
                         "expectedSchema": {
                             "api": {
+                                "rest": {
+                                    "baseUrl": "/api",
+                                    "defaultHeaders": {
+                                        "accept": "application/json"
+                                    }
+                                },
                                 "type": "rest"
                             },
                             "authTables": ["users", "sessions"],
@@ -590,6 +629,7 @@ mod tests {
 
                 assert!(json.contains("\n"));
                 assert!(json.contains("\"api\""));
+                assert!(json.contains("\"baseUrl\": \"/api\""));
                 assert!(json.contains("\"type\": \"rest\""));
                 assert!(json.contains("\"authTables\""));
                 assert!(json.contains("\"entities\""));

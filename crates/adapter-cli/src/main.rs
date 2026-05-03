@@ -131,6 +131,12 @@ mod tests {
                                 "engine": "postgres",
                                 "expectedSchema": {
                                     "api": {
+                                        "rest": {
+                                            "baseUrl": "/api",
+                                            "defaultHeaders": {
+                                                "accept": "application/json"
+                                            }
+                                        },
                                         "type": "rest"
                                     },
                                     "entities": [

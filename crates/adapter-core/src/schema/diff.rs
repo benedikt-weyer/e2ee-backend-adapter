@@ -175,6 +175,7 @@ mod tests {
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
         EntityManifest, EntityRestManifest, ExpectedEntityTableManifest,
         ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
+        ExpectedSchemaRestApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest, RestAuthPaths,
         SessionCookieNames, SessionManifest,
     };
@@ -206,6 +207,10 @@ mod tests {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
                     api: ExpectedSchemaApiManifest {
+                        rest: ExpectedSchemaRestApiManifest {
+                            base_url: "/api".to_owned(),
+                            default_headers: None,
+                        },
                         api_type: "rest".to_owned(),
                     },
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],

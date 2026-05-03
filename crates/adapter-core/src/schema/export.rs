@@ -29,13 +29,16 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output, "// Manifest: {}", manifest.name)?;
     writeln!(&mut output)?;
     writeln!(&mut output, "import {{")?;
+    writeln!(&mut output, "  createRestTransportFromExpectedSchema,")?;
     writeln!(&mut output, "  createEntitySchemaFromExpectedSchemaEntity,")?;
     writeln!(&mut output, "  createRestCrudAdapterFromExpectedSchemaEntity,")?;
     writeln!(&mut output, "  createRestPasswordAuthConfig,")?;
     writeln!(&mut output, "  type BackendAdapterExpectedSchemaManifest,")?;
+    writeln!(&mut output, "  type CreateGeneratedRestTransportOptions,")?;
     writeln!(&mut output, "  type CreateGeneratedEntitySchemaOptions,")?;
     writeln!(&mut output, "  type EncryptedFieldValue,")?;
     writeln!(&mut output, "  type EntitySchema,")?;
+    writeln!(&mut output, "  type FetchRestTransport,")?;
     writeln!(&mut output, "  type RestCrudAdapter,")?;
     writeln!(&mut output, "  type RestPasswordAuthConfig,")?;
     writeln!(&mut output, "  type RestTransport,")?;
@@ -68,8 +71,14 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output)?;
     writeln!(&mut output, "export const restAuthEndpoints = {auth_endpoints_json} as const;")?;
     writeln!(&mut output)?;
+    writeln!(&mut output, "export function createRestTransport(")?;
+    writeln!(&mut output, "  options: CreateGeneratedRestTransportOptions = {{}},")?;
+    writeln!(&mut output, "): FetchRestTransport {{")?;
+    writeln!(&mut output, "  return createRestTransportFromExpectedSchema(expectedSchema, options);")?;
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
     writeln!(&mut output, "export function createRestAuthConfig(")?;
-    writeln!(&mut output, "  transport: RestTransport,")?;
+    writeln!(&mut output, "  transport: RestTransport = createRestTransport(),")?;
     writeln!(&mut output, "): RestPasswordAuthConfig<SessionUser> {{")?;
     writeln!(&mut output, "  return createRestPasswordAuthConfig<SessionUser>({{")?;
     writeln!(&mut output, "    endpoints: restAuthEndpoints,")?;
@@ -148,7 +157,7 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output)?;
 
     writeln!(&mut output, "export function createRestCrudAdapters(")?;
-    writeln!(&mut output, "  transport: RestTransport,")?;
+    writeln!(&mut output, "  transport: RestTransport = createRestTransport(),")?;
     writeln!(&mut output, "): GeneratedRestCrudAdapters {{")?;
     writeln!(&mut output, "  return {{")?;
     for (index, entity) in manifest.database.expected_schema.entities.iter().enumerate() {
@@ -320,6 +329,7 @@ mod tests {
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
         EntityManifest, EntityRestManifest, ExpectedEntityTableManifest,
         ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
+        ExpectedSchemaRestApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest,
         RestAuthPaths, SessionCookieNames, SessionManifest,
     };
@@ -351,6 +361,10 @@ mod tests {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
                     api: ExpectedSchemaApiManifest {
+                        rest: ExpectedSchemaRestApiManifest {
+                            base_url: "/api".to_owned(),
+                            default_headers: None,
+                        },
                         api_type: "rest".to_owned(),
                     },
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
@@ -452,11 +466,13 @@ mod tests {
             .expect("typescript bindings should export");
 
         assert!(source.contains("export interface SessionUser"));
+        assert!(source.contains("export function createRestTransport"));
         assert!(source.contains("export type NoteEntity = { content: string } & { id: string } & { metadata?: { tags?: unknown[] | null } }"));
         assert!(source.contains("export type NoteRemoteRecord = { content: EncryptedFieldValue } & { id: string } & { metadata?: { tags?: unknown[] | null } }"));
         assert!(source.contains("export function createRestAuthConfig"));
         assert!(source.contains("export function createEntitySchemas"));
         assert!(source.contains("export function createRestCrudAdapters"));
+        assert!(source.contains("createRestTransportFromExpectedSchema(expectedSchema, options)"));
         assert!(source.contains("\"/auth/login\""));
     }
 }
