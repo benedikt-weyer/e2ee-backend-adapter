@@ -4,6 +4,8 @@
 
 It is intended to run the REST server itself, connect to the configured PostgreSQL database, expose optional WebSocket realtime endpoints, and provide explicit database expectation and diff tooling.
 
+Documentation is published to GitHub Pages at <https://benedikt-weyer.github.io/e2ee-backend-adapter/>.
+
 The current implementation bootstraps:
 
 - a Rust workspace with the main adapter crate and an internal CLI crate
@@ -39,6 +41,21 @@ GitHub Actions workflow:
 - `.github/workflows/release-crates.yml`
 - manual trigger with `patch`, `minor`, or `major`
 - expects `CARGO_REGISTRY_TOKEN` or `CRATES_IO_TOKEN` in repository secrets
+
+## Docs
+
+Build the MkDocs site locally:
+
+```bash
+python -m pip install -r docs/requirements.txt
+mkdocs build --strict
+```
+
+GitHub Pages deployment:
+
+- `.github/workflows/docs-pages.yml`
+- automatic on pushes to `main` that touch `docs/**`, `mkdocs.yml`, or the workflow itself
+- manual trigger available through `workflow_dispatch`
 
 Dry-run the publish flow:
 

@@ -1,8 +1,10 @@
 site_name: e2ee-backend-adapter
 site_description: Documentation for the e2ee-backend-adapter Rust crate and REST runtime
+site_url: https://benedikt-weyer.github.io/e2ee-backend-adapter/
 repo_url: https://github.com/benedikt-weyer/e2ee-backend-adapter
 repo_name: benedikt-weyer/e2ee-backend-adapter
 docs_dir: docs
+site_dir: site
 strict: true
 
 theme:
