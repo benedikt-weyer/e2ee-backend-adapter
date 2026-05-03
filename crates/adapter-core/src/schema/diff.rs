@@ -173,8 +173,9 @@ mod tests {
     use super::{compare_schema, ActualTableSchema};
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
-        EntityManifest, EntityRestManifest, ExpectedEntityTableManifest, ExpectedSchemaManifest,
-        RestAuthManifest, RestAuthPaths, SessionCookieNames, SessionManifest,
+        EntityManifest, EntityRestManifest, ExpectedEntityTableManifest,
+        ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest, RestAuthPaths,
+        SessionCookieNames, SessionManifest,
     };
 
     fn manifest() -> BackendAdapterManifest {
@@ -204,6 +205,22 @@ mod tests {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                    entities: vec![ExpectedSchemaEntityManifest {
+                        fields: vec![EntityFieldManifest {
+                            encrypted: false,
+                            entity_path: "id".to_owned(),
+                            entity_type: "string".to_owned(),
+                            nullable: false,
+                            optional: false,
+                            remote_path: "id".to_owned(),
+                            remote_type: "string".to_owned(),
+                            strategy_id: None,
+                        }],
+                        id_path: "id".to_owned(),
+                        name: "note".to_owned(),
+                        primary_key: "id".to_owned(),
+                        table_name: "notes".to_owned(),
+                    }],
                     entity_tables: vec![ExpectedEntityTableManifest {
                         primary_key: "id".to_owned(),
                         table_name: "notes".to_owned(),

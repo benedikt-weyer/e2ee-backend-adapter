@@ -1,7 +1,9 @@
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-pub const MANIFEST_VERSION: u32 = 1;
+use crate::config::BackendAdapterSchemaConfig;
+
+pub const MANIFEST_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,6 +151,7 @@ impl SessionCookieNames {
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseManifest {
     pub engine: String,
+    #[serde(default)]
     pub expected_schema: ExpectedSchemaManifest,
 }
 
@@ -161,10 +164,11 @@ impl DatabaseManifest {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaManifest {
     pub auth_tables: Vec<String>,
+    pub entities: Vec<ExpectedSchemaEntityManifest>,
     pub entity_tables: Vec<ExpectedEntityTableManifest>,
 }
 
@@ -172,6 +176,9 @@ impl ExpectedSchemaManifest {
     pub fn validate(&self) -> Result<()> {
         if self.auth_tables.is_empty() {
             bail!("Expected schema must define auth tables.");
+        }
+        if self.entities.is_empty() {
+            bail!("Expected schema must define entities.");
         }
         if self.entity_tables.is_empty() {
             bail!("Expected schema must define entity tables.");
@@ -183,6 +190,16 @@ impl ExpectedSchemaManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedEntityTableManifest {
+    pub primary_key: String,
+    pub table_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedSchemaEntityManifest {
+    pub fields: Vec<EntityFieldManifest>,
+    pub id_path: String,
+    pub name: String,
     pub primary_key: String,
     pub table_name: String,
 }
@@ -283,7 +300,19 @@ pub struct RealtimeEntityManifest {
 }
 
 pub fn parse_manifest(json: &str) -> Result<BackendAdapterManifest> {
-    let manifest: BackendAdapterManifest = serde_json::from_str(json)?;
+    parse_manifest_with_schema_config(json, None)
+}
+
+pub fn parse_manifest_with_schema_config(
+    json: &str,
+    schema_config: Option<&BackendAdapterSchemaConfig>,
+) -> Result<BackendAdapterManifest> {
+    let mut manifest: BackendAdapterManifest = serde_json::from_str(json)?;
+
+    if let Some(schema_config) = schema_config {
+        manifest.database.expected_schema = schema_config.expected_schema.clone();
+    }
+
     manifest.validate()?;
     Ok(manifest)
 }
@@ -299,12 +328,15 @@ pub fn expected_schema_to_pretty_json(manifest: &BackendAdapterManifest) -> Resu
 #[cfg(test)]
 mod tests {
         use super::{
-                expected_schema_to_pretty_json, parse_manifest, AuthManifest, BackendAdapterManifest,
-                DatabaseManifest, EntityFieldManifest, EntityManifest, EntityRestManifest,
-                ExpectedEntityTableManifest, ExpectedSchemaManifest, MANIFEST_VERSION, RealtimeManifest,
+            expected_schema_to_pretty_json, parse_manifest, parse_manifest_with_schema_config,
+            AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
+            EntityManifest, EntityRestManifest, ExpectedEntityTableManifest,
+            ExpectedSchemaEntityManifest, ExpectedSchemaManifest, MANIFEST_VERSION,
+            RealtimeManifest,
                 RealtimeEntityManifest, RestAuthManifest, RestAuthPaths, SessionCookieNames,
                 SessionManifest,
         };
+        use crate::config::parse_schema_config;
 
         fn manifest() -> BackendAdapterManifest {
                 BackendAdapterManifest {
@@ -333,6 +365,22 @@ mod tests {
                                 engine: "postgres".to_owned(),
                                 expected_schema: ExpectedSchemaManifest {
                                         auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                                entities: vec![ExpectedSchemaEntityManifest {
+                                    fields: vec![EntityFieldManifest {
+                                        encrypted: true,
+                                        entity_path: "content".to_owned(),
+                                        entity_type: "string".to_owned(),
+                                        nullable: false,
+                                        optional: false,
+                                        remote_path: "ciphertext".to_owned(),
+                                        remote_type: "string".to_owned(),
+                                        strategy_id: Some("aes-256-gcm".to_owned()),
+                                    }],
+                                    id_path: "id".to_owned(),
+                                    name: "note".to_owned(),
+                                    primary_key: "id".to_owned(),
+                                    table_name: "notes".to_owned(),
+                                }],
                                         entity_tables: vec![ExpectedEntityTableManifest {
                                                 primary_key: "id".to_owned(),
                                                 table_name: "notes".to_owned(),
@@ -379,7 +427,7 @@ mod tests {
         fn parse_manifest_accepts_camel_case_json() {
                 let json = r#"
                 {
-                    "version": 1,
+                    "version": 2,
                     "name": "notes-service",
                     "auth": {
                         "mode": "password-session",
@@ -406,6 +454,26 @@ mod tests {
                         "engine": "postgres",
                         "expectedSchema": {
                             "authTables": ["users", "sessions"],
+                            "entities": [
+                                {
+                                    "fields": [
+                                        {
+                                            "encrypted": true,
+                                            "entityPath": "content",
+                                            "entityType": "string",
+                                            "nullable": false,
+                                            "optional": false,
+                                            "remotePath": "ciphertext",
+                                            "remoteType": "string",
+                                            "strategyId": "aes-256-gcm"
+                                        }
+                                    ],
+                                    "idPath": "id",
+                                    "name": "note",
+                                    "primaryKey": "id",
+                                    "tableName": "notes"
+                                }
+                            ],
                             "entityTables": [
                                 {
                                     "primaryKey": "id",
@@ -472,6 +540,110 @@ mod tests {
 
                 assert!(json.contains("\n"));
                 assert!(json.contains("\"authTables\""));
+                assert!(json.contains("\"entities\""));
+                assert!(json.contains("\"entityPath\": \"content\""));
                 assert!(json.contains("\"tableName\": \"notes\""));
+        }
+
+        #[test]
+        fn parse_manifest_uses_schema_config_override() {
+                let json = r#"
+                {
+                    "version": 2,
+                    "name": "notes-service",
+                    "auth": {
+                        "mode": "password-session",
+                        "rest": {
+                            "paths": {
+                                "getKdfSalt": "/auth/kdf-salt",
+                                "login": "/auth/login",
+                                "logout": "/auth/logout",
+                                "refresh": "/auth/refresh",
+                                "registerBegin": "/auth/register-begin",
+                                "registerComplete": "/auth/register-complete"
+                            }
+                        },
+                        "session": {
+                            "cookieNames": {
+                                "refresh": "refresh_cookie",
+                                "session": "session_cookie"
+                            },
+                            "refreshDurationSeconds": 3600,
+                            "sessionDurationSeconds": 600
+                        }
+                    },
+                    "database": {
+                        "engine": "postgres"
+                    },
+                    "entities": [
+                        {
+                            "fields": [
+                                {
+                                    "encrypted": false,
+                                    "entityPath": "id",
+                                    "entityType": "string",
+                                    "nullable": false,
+                                    "optional": false,
+                                    "remotePath": "id",
+                                    "remoteType": "string"
+                                }
+                            ],
+                            "idPath": "id",
+                            "name": "note",
+                            "rest": {
+                                "allowCreate": true,
+                                "allowDelete": true,
+                                "allowGetById": true,
+                                "allowList": true,
+                                "allowUpdate": true,
+                                "basePath": "/entities/note"
+                            },
+                            "tableName": "notes"
+                        }
+                    ]
+                }
+                "#;
+                let schema_config = parse_schema_config(
+                    r#"
+                    {
+                        "expectedSchema": {
+                            "authTables": ["users", "sessions"],
+                            "entities": [
+                                {
+                                    "fields": [
+                                        {
+                                            "encrypted": true,
+                                            "entityPath": "content",
+                                            "entityType": "string",
+                                            "nullable": false,
+                                            "optional": false,
+                                            "remotePath": "ciphertext",
+                                            "remoteType": "string",
+                                            "strategyId": "aes-256-gcm"
+                                        }
+                                    ],
+                                    "idPath": "id",
+                                    "name": "note",
+                                    "primaryKey": "id",
+                                    "tableName": "notes"
+                                }
+                            ],
+                            "entityTables": [
+                                {
+                                    "primaryKey": "id",
+                                    "tableName": "notes"
+                                }
+                            ]
+                        }
+                    }
+                    "#,
+                )
+                .expect("schema config should parse");
+
+                let manifest = parse_manifest_with_schema_config(json, Some(&schema_config))
+                    .expect("manifest should parse with schema config");
+
+                assert!(manifest.database.expected_schema.entities[0].fields[0].encrypted);
+                assert_eq!(manifest.database.expected_schema.entity_tables[0].table_name, "notes");
         }
 }
