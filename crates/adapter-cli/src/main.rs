@@ -124,7 +124,7 @@ mod tests {
                 fs::write(
                         &path,
                         r#"{
-                            "version": 2,
+                            "version": 3,
                             "name": "notes-service",
                             "auth": {
                                 "mode": "password-session",
@@ -190,7 +190,15 @@ mod tests {
                                         }
                                     ],
                                     "authTables": ["users", "sessions"],
-                                    "entityTables": [{ "primaryKey": "id", "tableName": "notes" }]
+                                    "entityTables": [{
+                                        "columns": [{
+                                            "columnName": "id",
+                                            "nullable": false,
+                                            "sqlType": "TEXT"
+                                        }],
+                                        "primaryKey": "id",
+                                        "tableName": "notes"
+                                    }]
                                 }
                             },
                             "entities": [

@@ -6,10 +6,7 @@ use sqlx::{FromRow, PgPool};
 
 use crate::{
     db::{postgres::auth_schema_statements, PostgresBackend},
-    manifest::{
-        BackendAdapterManifest, EntityFieldManifest, ExpectedEntityTableManifest,
-        ExpectedSchemaEntityManifest,
-    },
+    manifest::{BackendAdapterManifest, ExpectedEntityTableManifest},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -223,7 +220,7 @@ fn sql_reconciliation_statements(
 
     for expected_table in &manifest.database.expected_schema.entity_tables {
         if missing_tables.contains(expected_table.table_name.as_str()) {
-            statements.push(render_missing_entity_table_sql(manifest, expected_table));
+            statements.push(render_missing_entity_table_sql(expected_table));
         }
     }
 
@@ -244,24 +241,32 @@ fn sql_reconciliation_statements(
     statements
 }
 
-fn render_missing_entity_table_sql(
-    manifest: &BackendAdapterManifest,
-    expected_table: &ExpectedEntityTableManifest,
-) -> String {
-    let column_type = manifest
-        .database
-        .expected_schema
-        .entities
+fn render_missing_entity_table_sql(expected_table: &ExpectedEntityTableManifest) -> String {
+    let columns = expected_table
+        .columns
         .iter()
-        .find(|entity| entity.table_name == expected_table.table_name)
-        .map(|entity| primary_key_column_type(entity, &expected_table.primary_key))
-        .unwrap_or("TEXT");
+        .map(|column| {
+            let mut line = format!(
+                "    {} {}",
+                quote_ident(&column.column_name),
+                column.sql_type,
+            );
+
+            if column.column_name == expected_table.primary_key {
+                line.push_str(" PRIMARY KEY");
+            } else if !column.nullable {
+                line.push_str(" NOT NULL");
+            }
+
+            line
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
 
     format!(
-        "-- The adapter currently validates entity table presence and primary keys only.\nCREATE TABLE IF NOT EXISTS {} (\n    {} {} PRIMARY KEY\n);",
+        "CREATE TABLE IF NOT EXISTS {} (\n{}\n);",
         quote_ident(&expected_table.table_name),
-        quote_ident(&expected_table.primary_key),
-        column_type,
+        columns,
     )
 }
 
@@ -278,24 +283,6 @@ fn render_primary_key_fix_sql(table_name: &str, expected_columns: &[String]) -> 
         quote_ident(table_name),
         expected_columns,
     )
-}
-
-fn primary_key_column_type(entity: &ExpectedSchemaEntityManifest, primary_key: &str) -> &'static str {
-    entity
-        .fields
-        .iter()
-        .find(|field| field.remote_path == primary_key || field.entity_path == entity.id_path)
-        .map(field_sql_type)
-        .unwrap_or("TEXT")
-}
-
-fn field_sql_type(field: &EntityFieldManifest) -> &'static str {
-    match field.remote_type.as_str() {
-        "boolean" => "BOOLEAN",
-        "number" => "DOUBLE PRECISION",
-        "array" | "json" | "object" | "unknown" => "JSONB",
-        _ => "TEXT",
-    }
 }
 
 fn normalize_sql_statement(statement: &str) -> String {
@@ -341,7 +328,7 @@ mod tests {
     };
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
-        EntityManifest, EntityRestManifest, ExpectedEntityTableManifest,
+        EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest, ExpectedEntityTableManifest,
         ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
         ExpectedSchemaRestApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest, RestAuthPaths,
@@ -410,6 +397,13 @@ mod tests {
                         table_name: "notes".to_owned(),
                     }],
                     entity_tables: vec![ExpectedEntityTableManifest {
+                        columns: vec![
+                            ExpectedEntityColumnManifest {
+                                column_name: "id".to_owned(),
+                                nullable: false,
+                                sql_type: "TEXT".to_owned(),
+                            },
+                        ],
                         primary_key: "id".to_owned(),
                         table_name: "notes".to_owned(),
                     }],
@@ -440,7 +434,7 @@ mod tests {
             }],
             name: "test".to_owned(),
             realtime: None,
-            version: 1,
+            version: 3,
         }
     }
 

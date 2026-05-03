@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-pub const MANIFEST_VERSION: u32 = 2;
+pub const MANIFEST_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +184,9 @@ impl ExpectedSchemaManifest {
         if self.entity_tables.is_empty() {
             bail!("Expected schema must define entity tables.");
         }
+        for entity_table in &self.entity_tables {
+            entity_table.validate()?;
+        }
         Ok(())
     }
 }
@@ -228,9 +231,66 @@ impl ExpectedSchemaRestApiManifest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExpectedEntityColumnManifest {
+    pub column_name: String,
+    pub nullable: bool,
+    pub sql_type: String,
+}
+
+impl ExpectedEntityColumnManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.column_name.trim().is_empty() {
+            bail!("Expected entity column names must not be empty.");
+        }
+        if self.sql_type.trim().is_empty() {
+            bail!(
+                "Expected entity column '{}' must define a SQL type.",
+                self.column_name,
+            );
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExpectedEntityTableManifest {
+    pub columns: Vec<ExpectedEntityColumnManifest>,
     pub primary_key: String,
     pub table_name: String,
+}
+
+impl ExpectedEntityTableManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.table_name.trim().is_empty() {
+            bail!("Expected entity table names must not be empty.");
+        }
+        if self.primary_key.trim().is_empty() {
+            bail!(
+                "Expected entity table '{}' must define a primary key column.",
+                self.table_name,
+            );
+        }
+        if self.columns.is_empty() {
+            bail!(
+                "Expected entity table '{}' must define at least one column.",
+                self.table_name,
+            );
+        }
+        for column in &self.columns {
+            column.validate()?;
+        }
+        if !self.columns.iter().any(|column| column.column_name == self.primary_key) {
+            bail!(
+                "Expected entity table '{}' must include primary key column '{}' in its column list.",
+                self.table_name,
+                self.primary_key,
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -303,7 +363,6 @@ impl EntityRestManifest {
         if !self.base_path.starts_with('/') {
             bail!("Entity REST base_path must start with '/'.");
         }
-
         if !(self.allow_create
             || self.allow_delete
             || self.allow_get_by_id
@@ -378,7 +437,7 @@ mod tests {
         use super::{
             expected_schema_to_pretty_json, parse_manifest, AuthManifest,
             BackendAdapterManifest, DatabaseManifest, EntityFieldManifest, EntityManifest,
-            EntityRestManifest, ExpectedEntityTableManifest, ExpectedSchemaApiManifest,
+            EntityRestManifest, ExpectedEntityColumnManifest, ExpectedEntityTableManifest, ExpectedSchemaApiManifest,
             ExpectedSchemaRestApiManifest,
             ExpectedSchemaEntityApiManifest, ExpectedSchemaEntityManifest,
             ExpectedSchemaManifest, MANIFEST_VERSION, RealtimeManifest,
@@ -451,6 +510,18 @@ mod tests {
                                     table_name: "notes".to_owned(),
                                 }],
                                         entity_tables: vec![ExpectedEntityTableManifest {
+                                            columns: vec![
+                                                ExpectedEntityColumnManifest {
+                                                    column_name: "ciphertext".to_owned(),
+                                                    nullable: false,
+                                                    sql_type: "TEXT".to_owned(),
+                                                },
+                                                ExpectedEntityColumnManifest {
+                                                    column_name: "id".to_owned(),
+                                                    nullable: false,
+                                                    sql_type: "TEXT".to_owned(),
+                                                },
+                                            ],
                                                 primary_key: "id".to_owned(),
                                                 table_name: "notes".to_owned(),
                                         }],
@@ -496,7 +567,7 @@ mod tests {
         fn parse_manifest_accepts_camel_case_json() {
                 let json = r#"
                 {
-                    "version": 2,
+                    "version": 3,
                     "name": "notes-service",
                     "auth": {
                         "mode": "password-session",
@@ -565,6 +636,18 @@ mod tests {
                             ],
                             "entityTables": [
                                 {
+                                    "columns": [
+                                        {
+                                            "columnName": "ciphertext",
+                                            "nullable": false,
+                                            "sqlType": "TEXT"
+                                        },
+                                        {
+                                            "columnName": "id",
+                                            "nullable": false,
+                                            "sqlType": "TEXT"
+                                        }
+                                    ],
                                     "primaryKey": "id",
                                     "tableName": "notes"
                                 }
@@ -634,6 +717,8 @@ mod tests {
                 assert!(json.contains("\"authTables\""));
                 assert!(json.contains("\"entities\""));
                 assert!(json.contains("\"entityPath\": \"content\""));
+                assert!(json.contains("\"columns\""));
+                assert!(json.contains("\"sqlType\": \"TEXT\""));
                 assert!(json.contains("\"tableName\": \"notes\""));
         }
 

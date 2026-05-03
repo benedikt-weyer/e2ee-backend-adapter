@@ -19,15 +19,14 @@ The generated SQL reconciles the schema guarantees the adapter currently
 validates:
 
 - creation of missing auth tables and auth indexes using the adapter's own SQL
-- creation of missing entity tables with the manifest primary key column
+- creation of missing entity tables from the manifest's explicit column metadata
 - primary-key fixes for existing entity tables
 - removal of unexpected tables with `DROP TABLE IF EXISTS ... CASCADE`
 
-Because the adapter does not yet own full entity persistence, the generated SQL
-does not attempt to infer every application-specific entity column. For missing
-entity tables it creates the manifest primary-key column, which is enough to
-bring the live schema back into alignment with the checks the adapter currently
-performs.
+Because the adapter still does not compare every non-primary-key change on
+existing entity tables, the generated SQL is strongest when tables are missing
+entirely. In that case it can now create the full declared table shape from the
+manifest's explicit `entityTables[].columns` metadata.
 
 If you want a SeaORM migration scaffold instead of a plain SQL file, pass
 `--format seaorm`:

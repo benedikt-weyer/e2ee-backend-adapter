@@ -380,7 +380,7 @@ mod tests {
     use super::{export_expected_schema, export_typescript_client_bindings};
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
-        EntityManifest, EntityRestManifest, ExpectedEntityTableManifest,
+        EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest, ExpectedEntityTableManifest,
         ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
         ExpectedSchemaRestApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest,
@@ -471,6 +471,23 @@ mod tests {
                         table_name: "notes".to_owned(),
                     }],
                     entity_tables: vec![ExpectedEntityTableManifest {
+                        columns: vec![
+                            ExpectedEntityColumnManifest {
+                                column_name: "content".to_owned(),
+                                nullable: false,
+                                sql_type: "TEXT".to_owned(),
+                            },
+                            ExpectedEntityColumnManifest {
+                                column_name: "id".to_owned(),
+                                nullable: false,
+                                sql_type: "TEXT".to_owned(),
+                            },
+                            ExpectedEntityColumnManifest {
+                                column_name: "metadata.tags".to_owned(),
+                                nullable: true,
+                                sql_type: "JSONB".to_owned(),
+                            },
+                        ],
                         primary_key: "id".to_owned(),
                         table_name: "notes".to_owned(),
                     }],
