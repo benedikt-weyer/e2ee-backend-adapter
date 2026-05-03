@@ -1,8 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::config::BackendAdapterSchemaConfig;
-
 pub const MANIFEST_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -151,7 +149,6 @@ impl SessionCookieNames {
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseManifest {
     pub engine: String,
-    #[serde(default)]
     pub expected_schema: ExpectedSchemaManifest,
 }
 
@@ -164,7 +161,7 @@ impl DatabaseManifest {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaManifest {
     pub auth_tables: Vec<String>,
@@ -300,19 +297,7 @@ pub struct RealtimeEntityManifest {
 }
 
 pub fn parse_manifest(json: &str) -> Result<BackendAdapterManifest> {
-    parse_manifest_with_schema_config(json, None)
-}
-
-pub fn parse_manifest_with_schema_config(
-    json: &str,
-    schema_config: Option<&BackendAdapterSchemaConfig>,
-) -> Result<BackendAdapterManifest> {
-    let mut manifest: BackendAdapterManifest = serde_json::from_str(json)?;
-
-    if let Some(schema_config) = schema_config {
-        manifest.database.expected_schema = schema_config.expected_schema.clone();
-    }
-
+    let manifest: BackendAdapterManifest = serde_json::from_str(json)?;
     manifest.validate()?;
     Ok(manifest)
 }
@@ -328,15 +313,13 @@ pub fn expected_schema_to_pretty_json(manifest: &BackendAdapterManifest) -> Resu
 #[cfg(test)]
 mod tests {
         use super::{
-            expected_schema_to_pretty_json, parse_manifest, parse_manifest_with_schema_config,
-            AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
-            EntityManifest, EntityRestManifest, ExpectedEntityTableManifest,
-            ExpectedSchemaEntityManifest, ExpectedSchemaManifest, MANIFEST_VERSION,
-            RealtimeManifest,
+            expected_schema_to_pretty_json, parse_manifest, AuthManifest,
+            BackendAdapterManifest, DatabaseManifest, EntityFieldManifest, EntityManifest,
+            EntityRestManifest, ExpectedEntityTableManifest, ExpectedSchemaEntityManifest,
+            ExpectedSchemaManifest, MANIFEST_VERSION, RealtimeManifest,
                 RealtimeEntityManifest, RestAuthManifest, RestAuthPaths, SessionCookieNames,
                 SessionManifest,
         };
-        use crate::config::parse_schema_config;
 
         fn manifest() -> BackendAdapterManifest {
                 BackendAdapterManifest {
@@ -545,105 +528,4 @@ mod tests {
                 assert!(json.contains("\"tableName\": \"notes\""));
         }
 
-        #[test]
-        fn parse_manifest_uses_schema_config_override() {
-                let json = r#"
-                {
-                    "version": 2,
-                    "name": "notes-service",
-                    "auth": {
-                        "mode": "password-session",
-                        "rest": {
-                            "paths": {
-                                "getKdfSalt": "/auth/kdf-salt",
-                                "login": "/auth/login",
-                                "logout": "/auth/logout",
-                                "refresh": "/auth/refresh",
-                                "registerBegin": "/auth/register-begin",
-                                "registerComplete": "/auth/register-complete"
-                            }
-                        },
-                        "session": {
-                            "cookieNames": {
-                                "refresh": "refresh_cookie",
-                                "session": "session_cookie"
-                            },
-                            "refreshDurationSeconds": 3600,
-                            "sessionDurationSeconds": 600
-                        }
-                    },
-                    "database": {
-                        "engine": "postgres"
-                    },
-                    "entities": [
-                        {
-                            "fields": [
-                                {
-                                    "encrypted": false,
-                                    "entityPath": "id",
-                                    "entityType": "string",
-                                    "nullable": false,
-                                    "optional": false,
-                                    "remotePath": "id",
-                                    "remoteType": "string"
-                                }
-                            ],
-                            "idPath": "id",
-                            "name": "note",
-                            "rest": {
-                                "allowCreate": true,
-                                "allowDelete": true,
-                                "allowGetById": true,
-                                "allowList": true,
-                                "allowUpdate": true,
-                                "basePath": "/entities/note"
-                            },
-                            "tableName": "notes"
-                        }
-                    ]
-                }
-                "#;
-                let schema_config = parse_schema_config(
-                    r#"
-                    {
-                        "expectedSchema": {
-                            "authTables": ["users", "sessions"],
-                            "entities": [
-                                {
-                                    "fields": [
-                                        {
-                                            "encrypted": true,
-                                            "entityPath": "content",
-                                            "entityType": "string",
-                                            "nullable": false,
-                                            "optional": false,
-                                            "remotePath": "ciphertext",
-                                            "remoteType": "string",
-                                            "strategyId": "aes-256-gcm"
-                                        }
-                                    ],
-                                    "idPath": "id",
-                                    "name": "note",
-                                    "primaryKey": "id",
-                                    "tableName": "notes"
-                                }
-                            ],
-                            "entityTables": [
-                                {
-                                    "primaryKey": "id",
-                                    "tableName": "notes"
-                                }
-                            ]
-                        }
-                    }
-                    "#,
-                )
-                .expect("schema config should parse");
-
-                let manifest = parse_manifest_with_schema_config(json, Some(&schema_config))
-                    .expect("manifest should parse with schema config");
-
-                assert!(manifest.database.expected_schema.entities[0].fields[0].encrypted);
-                assert_eq!(manifest.database.expected_schema.entity_tables[0].table_name, "notes");
-        }
 }

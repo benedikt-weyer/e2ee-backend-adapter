@@ -2,12 +2,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use e2ee_backend_adapter::{
-    config::parse_schema_config,
-    manifest::parse_manifest_with_schema_config,
-    AdapterRuntime,
-    AdapterRuntimeOptions,
-};
+use e2ee_backend_adapter::{manifest::parse_manifest, AdapterRuntime, AdapterRuntimeOptions};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
@@ -23,9 +18,6 @@ struct Args {
     #[arg(long, env = "E2EE_ADAPTER_MANIFEST")]
     manifest: PathBuf,
 
-    #[arg(long, env = "E2EE_ADAPTER_SCHEMA_CONFIG")]
-    schema_config: Option<PathBuf>,
-
     #[arg(long, default_value_t = false, env = "E2EE_ADAPTER_SECURE_COOKIES")]
     secure_cookies: bool,
 }
@@ -39,14 +31,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let manifest_json = std::fs::read_to_string(&args.manifest)
         .with_context(|| format!("Failed to read manifest file at {}", args.manifest.display()))?;
-    let schema_config = if let Some(path) = &args.schema_config {
-        let config_json = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read schema config file at {}", path.display()))?;
-        Some(parse_schema_config(&config_json)?)
-    } else {
-        None
-    };
-    let manifest = parse_manifest_with_schema_config(&manifest_json, schema_config.as_ref())?;
+    let manifest = parse_manifest(&manifest_json)?;
     let runtime = AdapterRuntime::from_manifest_with_options(
         manifest,
         &args.database_url,
@@ -92,7 +77,6 @@ mod tests {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080),
         );
         assert_eq!(args.manifest, PathBuf::from("/tmp/manifest.json"));
-        assert_eq!(args.schema_config, None);
         assert!(!args.secure_cookies);
     }
 
@@ -104,8 +88,6 @@ mod tests {
             "postgres://postgres:postgres@localhost:5432/app",
             "--manifest",
             "/tmp/manifest.json",
-            "--schema-config",
-            "/tmp/schema-config.json",
             "--bind",
             "0.0.0.0:9090",
             "--secure-cookies",
@@ -116,7 +98,6 @@ mod tests {
             args.bind,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9090),
         );
-        assert_eq!(args.schema_config, Some(PathBuf::from("/tmp/schema-config.json")));
         assert!(args.secure_cookies);
     }
 }

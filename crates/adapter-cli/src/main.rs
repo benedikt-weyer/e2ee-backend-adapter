@@ -3,8 +3,7 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use e2ee_backend_adapter::{
-    config::{parse_schema_config, BackendAdapterSchemaConfig},
-    manifest::{parse_manifest_with_schema_config, BackendAdapterManifest},
+    manifest::{parse_manifest, BackendAdapterManifest},
     schema::{diff::diff_database_against_manifest, export::export_expected_schema},
 };
 
@@ -23,23 +22,17 @@ enum Command {
         #[arg(long)]
         manifest: PathBuf,
         #[arg(long)]
-        schema_config: Option<PathBuf>,
-        #[arg(long)]
         out: PathBuf,
     },
     ExportExpectedSchema {
         #[arg(long)]
         manifest: PathBuf,
         #[arg(long)]
-        schema_config: Option<PathBuf>,
-        #[arg(long)]
         out: PathBuf,
     },
     ValidateManifest {
         #[arg(long)]
         manifest: PathBuf,
-        #[arg(long)]
-        schema_config: Option<PathBuf>,
     },
 }
 
@@ -51,53 +44,29 @@ async fn main() -> Result<()> {
         Command::Diff {
             database_url,
             manifest,
-            schema_config,
             out,
         } => {
-            let manifest = load_manifest(&manifest, schema_config.as_ref())?;
+            let manifest = load_manifest(&manifest)?;
             let diff = diff_database_against_manifest(&manifest, &database_url).await?;
             fs::write(out, diff)?;
         }
-        Command::ExportExpectedSchema {
-            manifest,
-            schema_config,
-            out,
-        } => {
-            let manifest = load_manifest(&manifest, schema_config.as_ref())?;
+        Command::ExportExpectedSchema { manifest, out } => {
+            let manifest = load_manifest(&manifest)?;
             let expected = export_expected_schema(&manifest)?;
             fs::write(out, expected)?;
         }
-        Command::ValidateManifest {
-            manifest,
-            schema_config,
-        } => {
-            let _ = load_manifest(&manifest, schema_config.as_ref())?;
+        Command::ValidateManifest { manifest } => {
+            let _ = load_manifest(&manifest)?;
         }
     }
 
     Ok(())
 }
 
-fn load_manifest(
-    path: &PathBuf,
-    schema_config_path: Option<&PathBuf>,
-) -> Result<BackendAdapterManifest> {
+fn load_manifest(path: &PathBuf) -> Result<BackendAdapterManifest> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read manifest file at {}", path.display()))?;
-    let schema_config = load_schema_config(schema_config_path)?;
-    parse_manifest_with_schema_config(&content, schema_config.as_ref())
-}
-
-fn load_schema_config(
-    path: Option<&PathBuf>,
-) -> Result<Option<BackendAdapterSchemaConfig>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read schema config file at {}", path.display()))?;
-    Ok(Some(parse_schema_config(&content)?))
+    parse_manifest(&content)
 }
 
 #[cfg(test)]
@@ -212,8 +181,6 @@ mod tests {
                         "postgres://postgres:postgres@localhost:5432/app",
                         "--manifest",
                         "/tmp/manifest.json",
-                "--schema-config",
-                "/tmp/schema-config.json",
                         "--out",
                         "/tmp/diff.json",
                 ])
@@ -223,12 +190,10 @@ mod tests {
                         Command::Diff {
                                 database_url,
                                 manifest,
-                    schema_config,
                                 out,
                         } => {
                                 assert_eq!(database_url, "postgres://postgres:postgres@localhost:5432/app");
                                 assert_eq!(manifest, PathBuf::from("/tmp/manifest.json"));
-                    assert_eq!(schema_config, Some(PathBuf::from("/tmp/schema-config.json")));
                                 assert_eq!(out, PathBuf::from("/tmp/diff.json"));
                         }
                         other => panic!("expected diff command, got {other:?}"),
@@ -239,7 +204,7 @@ mod tests {
         fn load_manifest_reads_valid_manifest_file() {
                 let path = create_temp_manifest_file();
 
-                let result = load_manifest(&path, None);
+                let result = load_manifest(&path);
                 let _ = fs::remove_file(&path);
 
                 let manifest = result.expect("manifest should load");
@@ -250,7 +215,7 @@ mod tests {
         #[test]
         fn load_manifest_returns_context_for_missing_file() {
                 let path = std::env::temp_dir().join("e2ee-backend-adapter-missing.json");
-                let result = load_manifest(&path, None);
+                let result = load_manifest(&path);
 
                 let error = result.expect_err("missing manifest should fail");
                 assert!(error.to_string().contains("Failed to read manifest file"));

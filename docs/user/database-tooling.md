@@ -8,11 +8,16 @@ Instead it provides tooling to:
 - compare a live PostgreSQL database against those expectations
 - write the result to files for review
 
-When you want the backend adapter to own field metadata such as which fields are
-encrypted, store that metadata in a schema config file and pass it to the
-adapter with `--schema-config`.
+`export-expected-schema` exports a JSON representation of the manifest's
+database expectations. It is not SQL DDL and it is not a migration file.
 
-Example schema config file:
+The generated file is for client-side consumption. The backend adapter does not
+read it back at runtime.
+
+The export is now rich enough to drive frontend or client-side entity-schema
+construction for declarative fields.
+
+The exported shape is:
 
 ```json
 {
@@ -30,6 +35,15 @@ Example schema config file:
 						"remotePath": "ciphertext",
 						"remoteType": "string",
 						"strategyId": "aes-256-gcm"
+					},
+					{
+						"encrypted": false,
+						"entityPath": "id",
+						"entityType": "string",
+						"nullable": false,
+						"optional": false,
+						"remotePath": "id",
+						"remoteType": "string"
 					}
 				],
 				"idPath": "id",
@@ -48,55 +62,6 @@ Example schema config file:
 }
 ```
 
-`export-expected-schema` exports a JSON representation of the manifest's
-database expectations. It is not SQL DDL and it is not a migration file.
-
-The export is now rich enough to drive frontend or client-side entity-schema
-construction for declarative fields.
-
-The exported shape is:
-
-```json
-{
-	"authTables": ["users", "sessions"],
-	"entities": [
-		{
-			"fields": [
-				{
-					"encrypted": true,
-					"entityPath": "content",
-					"entityType": "string",
-					"nullable": false,
-					"optional": false,
-					"remotePath": "ciphertext",
-					"remoteType": "string",
-					"strategyId": "aes-256-gcm"
-				},
-				{
-					"encrypted": false,
-					"entityPath": "id",
-					"entityType": "string",
-					"nullable": false,
-					"optional": false,
-					"remotePath": "id",
-					"remoteType": "string"
-				}
-			],
-			"idPath": "id",
-			"name": "note",
-			"primaryKey": "id",
-			"tableName": "notes"
-		}
-	],
-	"entityTables": [
-		{
-			"primaryKey": "id",
-			"tableName": "notes"
-		}
-	]
-}
-```
-
 This describes:
 
 - auth-related tables the adapter expects to exist
@@ -110,7 +75,6 @@ Example export workflow:
 ```bash
 e2ee-backend-adapter-cli export-expected-schema \
 	--manifest ./generated/e2ee-backend.manifest.json \
-	--schema-config ./config/e2ee-backend.schema.json \
 	--out ./generated/expected-schema.json
 ```
 
@@ -118,63 +82,65 @@ Example output file:
 
 ```json
 {
-	"authTables": ["users", "sessions"],
-	"entities": [
-		{
-			"fields": [
-				{
-					"encrypted": true,
-					"entityPath": "config",
-					"entityType": "object",
-					"nullable": true,
-					"optional": false,
-					"remotePath": "configEnvelope",
-					"remoteType": "object",
-					"strategyId": "aes-256-gcm"
-				},
-				{
-					"encrypted": false,
-					"entityPath": "id",
-					"entityType": "string",
-					"nullable": false,
-					"optional": false,
-					"remotePath": "id",
-					"remoteType": "string"
-				}
-			],
-			"idPath": "id",
-			"name": "dashboard",
-			"primaryKey": "id",
-			"tableName": "dashboards"
-		},
-		{
-			"fields": [
-				{
-					"encrypted": false,
-					"entityPath": "id",
-					"entityType": "string",
-					"nullable": false,
-					"optional": false,
-					"remotePath": "id",
-					"remoteType": "string"
-				}
-			],
-			"idPath": "id",
-			"name": "comment",
-			"primaryKey": "id",
-			"tableName": "comments"
-		}
-	],
-	"entityTables": [
-		{
-			"primaryKey": "id",
-			"tableName": "dashboards"
-		},
-		{
-			"primaryKey": "id",
-			"tableName": "comments"
-		}
-	]
+	"expectedSchema": {
+		"authTables": ["users", "sessions"],
+		"entities": [
+			{
+				"fields": [
+					{
+						"encrypted": true,
+						"entityPath": "config",
+						"entityType": "object",
+						"nullable": true,
+						"optional": false,
+						"remotePath": "configEnvelope",
+						"remoteType": "object",
+						"strategyId": "aes-256-gcm"
+					},
+					{
+						"encrypted": false,
+						"entityPath": "id",
+						"entityType": "string",
+						"nullable": false,
+						"optional": false,
+						"remotePath": "id",
+						"remoteType": "string"
+					}
+				],
+				"idPath": "id",
+				"name": "dashboard",
+				"primaryKey": "id",
+				"tableName": "dashboards"
+			},
+			{
+				"fields": [
+					{
+						"encrypted": false,
+						"entityPath": "id",
+						"entityType": "string",
+						"nullable": false,
+						"optional": false,
+						"remotePath": "id",
+						"remoteType": "string"
+					}
+				],
+				"idPath": "id",
+				"name": "comment",
+				"primaryKey": "id",
+				"tableName": "comments"
+			}
+		],
+		"entityTables": [
+			{
+				"primaryKey": "id",
+				"tableName": "dashboards"
+			},
+			{
+				"primaryKey": "id",
+				"tableName": "comments"
+			}
+		]
+	}
 }
 ```
 
@@ -195,7 +161,6 @@ Example:
 ```bash
 e2ee-backend-adapter-cli diff \
 	--manifest ./generated/e2ee-backend.manifest.json \
-	--schema-config ./config/e2ee-backend.schema.json \
 	--database-url postgres://postgres:postgres@localhost:5432/app \
 	--out ./generated/schema-diff.json
 ```
