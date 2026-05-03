@@ -64,7 +64,7 @@ async fn ensure_auth_schema(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-fn auth_schema_statements() -> [&'static str; 4] {
+pub(crate) fn auth_schema_statements() -> [&'static str; 4] {
     [
         CREATE_USERS_TABLE_SQL,
         CREATE_SESSIONS_TABLE_SQL,

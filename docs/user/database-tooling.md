@@ -1,237 +1,10 @@
 # Database Tooling
 
-The adapter does not create tables automatically.
+The adapter does not generate full application-specific table layouts yet, but
+it can compare the manifest against a live PostgreSQL schema and emit
+reconciliation output.
 
-Instead it provides tooling to:
-
-- export the schema it expects
-- compare a live PostgreSQL database against those expectations
-- write the result to files for review
-
-`export-expected-schema` exports a JSON representation of the manifest's
-database expectations. It is not SQL DDL and it is not a migration file.
-
-The generated file is for client-side consumption. The backend adapter does not
-read it back at runtime.
-
-If you also pass `--typescript-out`, the adapter writes a generated TypeScript
-companion module alongside the JSON export. For now, TypeScript is the only
-supported language target.
-
-The export is now rich enough to drive frontend or client-side entity-schema
-construction for declarative fields.
-
-The exported shape is:
-
-```json
-{
-	"expectedSchema": {
-		"api": {
-			"rest": {
-				"baseUrl": "/api",
-				"defaultHeaders": {
-					"accept": "application/json"
-				}
-			},
-			"type": "rest"
-		},
-		"authTables": ["users", "sessions"],
-		"entities": [
-			{
-				"api": {
-					"rest": {
-						"allowCreate": true,
-						"allowDelete": true,
-						"allowGetById": true,
-						"allowList": true,
-						"allowUpdate": true,
-						"basePath": "/entities/note"
-					},
-					"type": "rest"
-				},
-				"fields": [
-					{
-						"encrypted": true,
-						"entityPath": "content",
-						"entityType": "string",
-						"nullable": false,
-						"optional": false,
-						"remotePath": "ciphertext",
-						"remoteType": "string",
-						"strategyId": "aes-256-gcm"
-					},
-					{
-						"encrypted": false,
-						"entityPath": "id",
-						"entityType": "string",
-						"nullable": false,
-						"optional": false,
-						"remotePath": "id",
-						"remoteType": "string"
-					}
-				],
-				"idPath": "id",
-				"name": "note",
-				"primaryKey": "id",
-				"tableName": "notes"
-			}
-		],
-		"entityTables": [
-			{
-				"primaryKey": "id",
-				"tableName": "notes"
-			}
-		]
-	}
-}
-```
-
-This describes:
-
-- the API family this generated schema targets
-- the default REST transport base URL and headers exported for generated clients
-- auth-related tables the adapter expects to exist
-- entity tables the adapter expects to exist
-- the expected primary key field for each entity table
-- per-entity default REST route metadata derived from the adapter config
-- per-entity field metadata including logical field names, remote field names,
-  data types, nullability, optionality, and whether a field is e2ee-encrypted
-
-Example export workflow:
-
-```bash
-e2ee-backend-adapter-cli export-expected-schema \
-	--manifest ./generated/e2ee-backend.manifest.json \
-	--out ./generated/expected-schema.json \
-	--typescript-out ./generated/e2ee-client-bindings.ts
-```
-
-The generated TypeScript module exports:
-
-- `SessionUser`
-- `<EntityName>Entity`, `<EntityName>RemoteRecord`, and `<EntityName>Id` type aliases
-- `createRestTransport(...)`
-- `createRestAuthConfig(...)`
-- `createEntitySchemas(...)`
-- `createRestModels(...)`
-- `createRestCrudAdapters(...)`
-
-That lets a client app import typed auth and model helpers directly instead of
-rewriting `SessionUser`, entity types, REST route wiring, or default transport
-configuration by hand. `createRestModels(...)` also wires the generated model
-map automatically so apps can keep using `createE2eeBackend(...)` with
-`models: createRestModels()`.
-
-Example output file:
-
-```json
-{
-	"expectedSchema": {
-		"api": {
-			"rest": {
-				"baseUrl": "/api",
-				"defaultHeaders": {
-					"accept": "application/json"
-				}
-			},
-			"type": "rest"
-		},
-		"authTables": ["users", "sessions"],
-		"entities": [
-			{
-				"api": {
-					"rest": {
-						"allowCreate": true,
-						"allowDelete": true,
-						"allowGetById": true,
-						"allowList": true,
-						"allowUpdate": true,
-						"basePath": "/entities/dashboard"
-					},
-					"type": "rest"
-				},
-				"fields": [
-					{
-						"encrypted": true,
-						"entityPath": "config",
-						"entityType": "object",
-						"nullable": true,
-						"optional": false,
-						"remotePath": "configEnvelope",
-						"remoteType": "object",
-						"strategyId": "aes-256-gcm"
-					},
-					{
-						"encrypted": false,
-						"entityPath": "id",
-						"entityType": "string",
-						"nullable": false,
-						"optional": false,
-						"remotePath": "id",
-						"remoteType": "string"
-					}
-				],
-				"idPath": "id",
-				"name": "dashboard",
-				"primaryKey": "id",
-				"tableName": "dashboards"
-			},
-			{
-				"api": {
-					"rest": {
-						"allowCreate": true,
-						"allowDelete": true,
-						"allowGetById": true,
-						"allowList": true,
-						"allowUpdate": true,
-						"basePath": "/entities/comment"
-					},
-					"type": "rest"
-				},
-				"fields": [
-					{
-						"encrypted": false,
-						"entityPath": "id",
-						"entityType": "string",
-						"nullable": false,
-						"optional": false,
-						"remotePath": "id",
-						"remoteType": "string"
-					}
-				],
-				"idPath": "id",
-				"name": "comment",
-				"primaryKey": "id",
-				"tableName": "comments"
-			}
-		],
-		"entityTables": [
-			{
-				"primaryKey": "id",
-				"tableName": "dashboards"
-			},
-			{
-				"primaryKey": "id",
-				"tableName": "comments"
-			}
-		]
-	}
-}
-```
-
-On the client side, `e2ee-client-backend` can now reconstruct declarative
-`EntitySchema` definitions from `expectedSchema.entities` and derive default
-`RestCrudAdapter` routes from the exported API metadata, without redefining
-field paths, types, encryption flags, REST CRUD paths, or TypeScript entity
-aliases by hand.
-
-The current CLI scaffold already supports:
-
-- `validate-manifest`
-- `export-expected-schema`
-- `diff`
-
-`diff` now connects to PostgreSQL and compares the manifest against the live `public` schema.
+The `diff` command now writes SQL by default.
 
 Example:
 
@@ -239,5 +12,36 @@ Example:
 e2ee-backend-adapter-cli diff \
 	--manifest ./generated/e2ee-backend.manifest.json \
 	--database-url postgres://postgres:postgres@localhost:5432/app \
-	--out ./generated/schema-diff.json
+	--out ./generated/schema-diff.sql
 ```
+
+The generated SQL reconciles the schema guarantees the adapter currently
+validates:
+
+- creation of missing auth tables and auth indexes using the adapter's own SQL
+- creation of missing entity tables with the manifest primary key column
+- primary-key fixes for existing entity tables
+- removal of unexpected tables with `DROP TABLE IF EXISTS ... CASCADE`
+
+Because the adapter does not yet own full entity persistence, the generated SQL
+does not attempt to infer every application-specific entity column. For missing
+entity tables it creates the manifest primary-key column, which is enough to
+bring the live schema back into alignment with the checks the adapter currently
+performs.
+
+If you want a SeaORM migration scaffold instead of a plain SQL file, pass
+`--format seaorm`:
+
+```bash
+e2ee-backend-adapter-cli diff \
+	--format seaorm \
+	--manifest ./generated/e2ee-backend.manifest.json \
+	--database-url postgres://postgres:postgres@localhost:5432/app \
+	--out ./migration/src/m20260503_000001_sync_manifest.rs
+```
+
+That output wraps the generated SQL inside a SeaORM migration file and leaves
+`down(...)` as a no-op.
+
+If you still want the old machine-readable report, `--format json` remains
+available.

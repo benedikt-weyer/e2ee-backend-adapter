@@ -1,11 +1,11 @@
 use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use e2ee_backend_adapter::{
     manifest::{parse_manifest, BackendAdapterManifest},
     schema::{
-        diff::diff_database_against_manifest,
+        diff::{diff_database_against_manifest, SchemaDiffOutputFormat},
         export::{export_expected_schema, export_typescript_client_bindings},
     },
 };
@@ -22,6 +22,8 @@ enum Command {
     Diff {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
+        #[arg(long, value_enum, default_value_t = DiffFormat::Sql)]
+        format: DiffFormat,
         #[arg(long)]
         manifest: PathBuf,
         #[arg(long)]
@@ -41,6 +43,23 @@ enum Command {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum DiffFormat {
+    Json,
+    Seaorm,
+    Sql,
+}
+
+impl From<DiffFormat> for SchemaDiffOutputFormat {
+    fn from(value: DiffFormat) -> Self {
+        match value {
+            DiffFormat::Json => SchemaDiffOutputFormat::Json,
+            DiffFormat::Seaorm => SchemaDiffOutputFormat::Seaorm,
+            DiffFormat::Sql => SchemaDiffOutputFormat::Sql,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -48,11 +67,12 @@ async fn main() -> Result<()> {
     match args.command {
         Command::Diff {
             database_url,
+            format,
             manifest,
             out,
         } => {
             let manifest = load_manifest(&manifest)?;
-            let diff = diff_database_against_manifest(&manifest, &database_url).await?;
+            let diff = diff_database_against_manifest(&manifest, &database_url, format.into()).await?;
             fs::write(out, diff)?;
         }
         Command::ExportExpectedSchema {
@@ -84,7 +104,7 @@ fn load_manifest(path: &PathBuf) -> Result<BackendAdapterManifest> {
 
 #[cfg(test)]
 mod tests {
-        use super::{load_manifest, Args, Command};
+    use super::{load_manifest, Args, Command, DiffFormat};
         use clap::Parser;
         use std::{
                 fs,
@@ -212,22 +232,26 @@ mod tests {
                         "diff",
                         "--database-url",
                         "postgres://postgres:postgres@localhost:5432/app",
+                        "--format",
+                        "seaorm",
                         "--manifest",
                         "/tmp/manifest.json",
                         "--out",
-                        "/tmp/diff.json",
+                        "/tmp/migration.rs",
                 ])
                 .expect("arguments should parse");
 
                 match args.command {
                         Command::Diff {
                                 database_url,
+                            format,
                                 manifest,
                                 out,
                         } => {
                                 assert_eq!(database_url, "postgres://postgres:postgres@localhost:5432/app");
+                            assert_eq!(format, DiffFormat::Seaorm);
                                 assert_eq!(manifest, PathBuf::from("/tmp/manifest.json"));
-                                assert_eq!(out, PathBuf::from("/tmp/diff.json"));
+                            assert_eq!(out, PathBuf::from("/tmp/migration.rs"));
                         }
                         other => panic!("expected diff command, got {other:?}"),
                 }

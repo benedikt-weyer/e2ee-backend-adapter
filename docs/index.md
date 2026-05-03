@@ -7,7 +7,7 @@ It is intended to:
 - run the REST server for auth and entity routes
 - connect directly to the configured PostgreSQL database
 - expose optional WebSocket realtime endpoints
-- export expected database schema information
-- compare the expected schema against a live database and write diffs to a file
+- export generated client schema information from the manifest
+- compare the expected database shape against a live database and write SQL or migration output
 
 The current implementation is the first scaffold of that runtime. It already defines the manifest contract, starts a server, validates the manifest, and verifies PostgreSQL connectivity.

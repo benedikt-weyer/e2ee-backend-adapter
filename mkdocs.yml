@@ -23,7 +23,7 @@ nav:
   - User Guide:
       - Getting Started: user/getting-started.md
       - Schema Manifest: user/schema-manifest.md
-      - Database Tooling: user/database-tooling.md
+      - Database Diff And Migrations: user/database-tooling.md
   - Developer Guide:
       - Architecture: developer/architecture.md
 
