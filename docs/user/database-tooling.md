@@ -14,6 +14,10 @@ database expectations. It is not SQL DDL and it is not a migration file.
 The generated file is for client-side consumption. The backend adapter does not
 read it back at runtime.
 
+If you also pass `--typescript-out`, the adapter writes a generated TypeScript
+companion module alongside the JSON export. For now, TypeScript is the only
+supported language target.
+
 The export is now rich enough to drive frontend or client-side entity-schema
 construction for declarative fields.
 
@@ -91,8 +95,20 @@ Example export workflow:
 ```bash
 e2ee-backend-adapter-cli export-expected-schema \
 	--manifest ./generated/e2ee-backend.manifest.json \
-	--out ./generated/expected-schema.json
+	--out ./generated/expected-schema.json \
+	--typescript-out ./generated/e2ee-client-bindings.ts
 ```
+
+The generated TypeScript module exports:
+
+- `SessionUser`
+- `<EntityName>Entity`, `<EntityName>RemoteRecord`, and `<EntityName>Id` type aliases
+- `createRestAuthConfig(...)`
+- `createEntitySchemas(...)`
+- `createRestCrudAdapters(...)`
+
+That lets a client app import typed auth and model helpers directly instead of
+rewriting `SessionUser`, entity types, or REST route wiring by hand.
 
 Example output file:
 
@@ -188,7 +204,8 @@ Example output file:
 On the client side, `e2ee-client-backend` can now reconstruct declarative
 `EntitySchema` definitions from `expectedSchema.entities` and derive default
 `RestCrudAdapter` routes from the exported API metadata, without redefining
-field paths, types, encryption flags, or REST CRUD paths by hand.
+field paths, types, encryption flags, REST CRUD paths, or TypeScript entity
+aliases by hand.
 
 The current CLI scaffold already supports:
 

@@ -4,7 +4,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use e2ee_backend_adapter::{
     manifest::{parse_manifest, BackendAdapterManifest},
-    schema::{diff::diff_database_against_manifest, export::export_expected_schema},
+    schema::{
+        diff::diff_database_against_manifest,
+        export::{export_expected_schema, export_typescript_client_bindings},
+    },
 };
 
 #[derive(Debug, Parser)]
@@ -29,6 +32,8 @@ enum Command {
         manifest: PathBuf,
         #[arg(long)]
         out: PathBuf,
+        #[arg(long)]
+        typescript_out: Option<PathBuf>,
     },
     ValidateManifest {
         #[arg(long)]
@@ -50,10 +55,18 @@ async fn main() -> Result<()> {
             let diff = diff_database_against_manifest(&manifest, &database_url).await?;
             fs::write(out, diff)?;
         }
-        Command::ExportExpectedSchema { manifest, out } => {
+        Command::ExportExpectedSchema {
+            manifest,
+            out,
+            typescript_out,
+        } => {
             let manifest = load_manifest(&manifest)?;
             let expected = export_expected_schema(&manifest)?;
             fs::write(out, expected)?;
+            if let Some(typescript_out) = typescript_out {
+                let typescript = export_typescript_client_bindings(&manifest)?;
+                fs::write(typescript_out, typescript)?;
+            }
         }
         Command::ValidateManifest { manifest } => {
             let _ = load_manifest(&manifest)?;
@@ -212,6 +225,34 @@ mod tests {
                         }
                         other => panic!("expected diff command, got {other:?}"),
                 }
+        }
+
+        #[test]
+        fn parses_export_expected_schema_typescript_output_argument() {
+            let args = Args::try_parse_from([
+                "adapter-cli",
+                "export-expected-schema",
+                "--manifest",
+                "/tmp/manifest.json",
+                "--out",
+                "/tmp/expected-schema.json",
+                "--typescript-out",
+                "/tmp/generated-types.ts",
+            ])
+            .expect("arguments should parse");
+
+            match args.command {
+                Command::ExportExpectedSchema {
+                    manifest,
+                    out,
+                    typescript_out,
+                } => {
+                    assert_eq!(manifest, PathBuf::from("/tmp/manifest.json"));
+                    assert_eq!(out, PathBuf::from("/tmp/expected-schema.json"));
+                    assert_eq!(typescript_out, Some(PathBuf::from("/tmp/generated-types.ts")));
+                }
+                other => panic!("expected export-expected-schema command, got {other:?}"),
+            }
         }
 
         #[test]
