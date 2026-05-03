@@ -113,11 +113,14 @@ The generated TypeScript module exports:
 - `createRestTransport(...)`
 - `createRestAuthConfig(...)`
 - `createEntitySchemas(...)`
+- `createRestModels(...)`
 - `createRestCrudAdapters(...)`
 
 That lets a client app import typed auth and model helpers directly instead of
 rewriting `SessionUser`, entity types, REST route wiring, or default transport
-configuration by hand.
+configuration by hand. `createRestModels(...)` also wires the generated model
+map automatically so apps can keep using `createE2eeBackend(...)` with
+`models: createRestModels()`.
 
 Example output file:
 

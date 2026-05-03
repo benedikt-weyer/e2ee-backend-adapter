@@ -33,7 +33,9 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output, "  createEntitySchemaFromExpectedSchemaEntity,")?;
     writeln!(&mut output, "  createRestCrudAdapterFromExpectedSchemaEntity,")?;
     writeln!(&mut output, "  createRestPasswordAuthConfig,")?;
+    writeln!(&mut output, "  defineClientModel,")?;
     writeln!(&mut output, "  type BackendAdapterExpectedSchemaManifest,")?;
+    writeln!(&mut output, "  type ClientModelDefinition,")?;
     writeln!(&mut output, "  type CreateGeneratedRestTransportOptions,")?;
     writeln!(&mut output, "  type CreateGeneratedEntitySchemaOptions,")?;
     writeln!(&mut output, "  type EncryptedFieldValue,")?;
@@ -153,6 +155,57 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
             alias_base,
         )?;
     }
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+
+    writeln!(&mut output, "export interface CreateRestModelsOptions {{")?;
+    writeln!(&mut output, "  schemaOptions?: GeneratedSchemaOptions;")?;
+    writeln!(&mut output, "  transport?: RestTransport;")?;
+    writeln!(&mut output, "  transportOptions?: CreateGeneratedRestTransportOptions;")?;
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+
+    writeln!(&mut output, "export interface GeneratedRestModels {{")?;
+    for entity in &manifest.database.expected_schema.entities {
+        let alias_base = pascal_case(&entity.name);
+        writeln!(
+            &mut output,
+            "  {}: ClientModelDefinition<EntitySchema<{}Entity, {}RemoteRecord, {}Id>>;",
+            typescript_property_name(&entity.table_name),
+            alias_base,
+            alias_base,
+            alias_base,
+        )?;
+    }
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+
+    writeln!(&mut output, "export function createRestModels(")?;
+    writeln!(&mut output, "  options: CreateRestModelsOptions = {{}},")?;
+    writeln!(&mut output, "): GeneratedRestModels {{")?;
+    writeln!(&mut output, "  const transport = options.transport ?? createRestTransport(options.transportOptions ?? {{}});")?;
+    writeln!(&mut output, "  const schemas = createEntitySchemas(options.schemaOptions ?? {{}});")?;
+    writeln!(&mut output, "  const adapters = createRestCrudAdapters(transport);")?;
+    writeln!(&mut output, "  return {{")?;
+    for entity in &manifest.database.expected_schema.entities {
+        writeln!(
+            &mut output,
+            "    {}: defineClientModel({{",
+            typescript_property_name(&entity.table_name),
+        )?;
+        writeln!(
+            &mut output,
+            "      adapter: {},",
+            typescript_member_access("adapters", &entity.name),
+        )?;
+        writeln!(
+            &mut output,
+            "      schema: {},",
+            typescript_member_access("schemas", &entity.name),
+        )?;
+        writeln!(&mut output, "    }}),")?;
+    }
+    writeln!(&mut output, "  }};")?;
     writeln!(&mut output, "}}")?;
     writeln!(&mut output)?;
 
@@ -471,6 +524,7 @@ mod tests {
         assert!(source.contains("export type NoteRemoteRecord = { content: EncryptedFieldValue } & { id: string } & { metadata?: { tags?: unknown[] | null } }"));
         assert!(source.contains("export function createRestAuthConfig"));
         assert!(source.contains("export function createEntitySchemas"));
+        assert!(source.contains("export function createRestModels"));
         assert!(source.contains("export function createRestCrudAdapters"));
         assert!(source.contains("createRestTransportFromExpectedSchema(expectedSchema, options)"));
         assert!(source.contains("\"/auth/login\""));
