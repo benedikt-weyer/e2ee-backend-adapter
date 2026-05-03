@@ -174,6 +174,7 @@ mod tests {
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
         EntityManifest, EntityRestManifest, ExpectedEntityTableManifest,
+        ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest, RestAuthPaths,
         SessionCookieNames, SessionManifest,
     };
@@ -204,8 +205,22 @@ mod tests {
             database: DatabaseManifest {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
+                    api: ExpectedSchemaApiManifest {
+                        api_type: "rest".to_owned(),
+                    },
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
                     entities: vec![ExpectedSchemaEntityManifest {
+                        api: ExpectedSchemaEntityApiManifest {
+                            rest: EntityRestManifest {
+                                allow_create: true,
+                                allow_delete: true,
+                                allow_get_by_id: true,
+                                allow_list: true,
+                                allow_update: true,
+                                base_path: "/entities/note".to_owned(),
+                            },
+                            api_type: "rest".to_owned(),
+                        },
                         fields: vec![EntityFieldManifest {
                             encrypted: false,
                             entity_path: "id".to_owned(),

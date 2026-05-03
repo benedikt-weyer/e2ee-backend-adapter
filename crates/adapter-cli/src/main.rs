@@ -117,8 +117,22 @@ mod tests {
                             "database": {
                                 "engine": "postgres",
                                 "expectedSchema": {
+                                    "api": {
+                                        "type": "rest"
+                                    },
                                     "entities": [
                                         {
+                                            "api": {
+                                                "rest": {
+                                                    "allowCreate": true,
+                                                    "allowDelete": true,
+                                                    "allowGetById": true,
+                                                    "allowList": true,
+                                                    "allowUpdate": true,
+                                                    "basePath": "/entities/note"
+                                                },
+                                                "type": "rest"
+                                            },
                                             "fields": [
                                                 {
                                                     "encrypted": false,

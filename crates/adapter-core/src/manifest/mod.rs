@@ -164,6 +164,7 @@ impl DatabaseManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaManifest {
+    pub api: ExpectedSchemaApiManifest,
     pub auth_tables: Vec<String>,
     pub entities: Vec<ExpectedSchemaEntityManifest>,
     pub entity_tables: Vec<ExpectedEntityTableManifest>,
@@ -171,6 +172,7 @@ pub struct ExpectedSchemaManifest {
 
 impl ExpectedSchemaManifest {
     pub fn validate(&self) -> Result<()> {
+        self.api.validate()?;
         if self.auth_tables.is_empty() {
             bail!("Expected schema must define auth tables.");
         }
@@ -186,6 +188,23 @@ impl ExpectedSchemaManifest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExpectedSchemaApiManifest {
+    #[serde(rename = "type")]
+    pub api_type: String,
+}
+
+impl ExpectedSchemaApiManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.api_type != "rest" {
+            bail!("Only REST generated schema APIs are supported in v1.");
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExpectedEntityTableManifest {
     pub primary_key: String,
     pub table_name: String,
@@ -194,11 +213,30 @@ pub struct ExpectedEntityTableManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaEntityManifest {
+    pub api: ExpectedSchemaEntityApiManifest,
     pub fields: Vec<EntityFieldManifest>,
     pub id_path: String,
     pub name: String,
     pub primary_key: String,
     pub table_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedSchemaEntityApiManifest {
+    pub rest: EntityRestManifest,
+    #[serde(rename = "type")]
+    pub api_type: String,
+}
+
+impl ExpectedSchemaEntityApiManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.api_type != "rest" {
+            bail!("Only REST entity APIs are supported in v1.");
+        }
+
+        self.rest.validate()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -315,7 +353,8 @@ mod tests {
         use super::{
             expected_schema_to_pretty_json, parse_manifest, AuthManifest,
             BackendAdapterManifest, DatabaseManifest, EntityFieldManifest, EntityManifest,
-            EntityRestManifest, ExpectedEntityTableManifest, ExpectedSchemaEntityManifest,
+            EntityRestManifest, ExpectedEntityTableManifest, ExpectedSchemaApiManifest,
+            ExpectedSchemaEntityApiManifest, ExpectedSchemaEntityManifest,
             ExpectedSchemaManifest, MANIFEST_VERSION, RealtimeManifest,
                 RealtimeEntityManifest, RestAuthManifest, RestAuthPaths, SessionCookieNames,
                 SessionManifest,
@@ -347,8 +386,22 @@ mod tests {
                         database: DatabaseManifest {
                                 engine: "postgres".to_owned(),
                                 expected_schema: ExpectedSchemaManifest {
+                                        api: ExpectedSchemaApiManifest {
+                                            api_type: "rest".to_owned(),
+                                        },
                                         auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
                                 entities: vec![ExpectedSchemaEntityManifest {
+                                    api: ExpectedSchemaEntityApiManifest {
+                                        rest: EntityRestManifest {
+                                            allow_create: true,
+                                            allow_delete: true,
+                                            allow_get_by_id: true,
+                                            allow_list: true,
+                                            allow_update: true,
+                                            base_path: "/entities/note".to_owned(),
+                                        },
+                                        api_type: "rest".to_owned(),
+                                    },
                                     fields: vec![EntityFieldManifest {
                                         encrypted: true,
                                         entity_path: "content".to_owned(),
@@ -436,9 +489,23 @@ mod tests {
                     "database": {
                         "engine": "postgres",
                         "expectedSchema": {
+                            "api": {
+                                "type": "rest"
+                            },
                             "authTables": ["users", "sessions"],
                             "entities": [
                                 {
+                                    "api": {
+                                        "rest": {
+                                            "allowCreate": true,
+                                            "allowDelete": true,
+                                            "allowGetById": true,
+                                            "allowList": true,
+                                            "allowUpdate": true,
+                                            "basePath": "/entities/note"
+                                        },
+                                        "type": "rest"
+                                    },
                                     "fields": [
                                         {
                                             "encrypted": true,
@@ -522,6 +589,8 @@ mod tests {
                 let json = expected_schema_to_pretty_json(&manifest()).expect("schema export should succeed");
 
                 assert!(json.contains("\n"));
+                assert!(json.contains("\"api\""));
+                assert!(json.contains("\"type\": \"rest\""));
                 assert!(json.contains("\"authTables\""));
                 assert!(json.contains("\"entities\""));
                 assert!(json.contains("\"entityPath\": \"content\""));

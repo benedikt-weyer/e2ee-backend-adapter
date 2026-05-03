@@ -22,9 +22,23 @@ The exported shape is:
 ```json
 {
 	"expectedSchema": {
+		"api": {
+			"type": "rest"
+		},
 		"authTables": ["users", "sessions"],
 		"entities": [
 			{
+				"api": {
+					"rest": {
+						"allowCreate": true,
+						"allowDelete": true,
+						"allowGetById": true,
+						"allowList": true,
+						"allowUpdate": true,
+						"basePath": "/entities/note"
+					},
+					"type": "rest"
+				},
 				"fields": [
 					{
 						"encrypted": true,
@@ -64,9 +78,11 @@ The exported shape is:
 
 This describes:
 
+- the API family this generated schema targets
 - auth-related tables the adapter expects to exist
 - entity tables the adapter expects to exist
 - the expected primary key field for each entity table
+- per-entity default REST route metadata derived from the adapter config
 - per-entity field metadata including logical field names, remote field names,
   data types, nullability, optionality, and whether a field is e2ee-encrypted
 
@@ -83,9 +99,23 @@ Example output file:
 ```json
 {
 	"expectedSchema": {
+		"api": {
+			"type": "rest"
+		},
 		"authTables": ["users", "sessions"],
 		"entities": [
 			{
+				"api": {
+					"rest": {
+						"allowCreate": true,
+						"allowDelete": true,
+						"allowGetById": true,
+						"allowList": true,
+						"allowUpdate": true,
+						"basePath": "/entities/dashboard"
+					},
+					"type": "rest"
+				},
 				"fields": [
 					{
 						"encrypted": true,
@@ -113,6 +143,17 @@ Example output file:
 				"tableName": "dashboards"
 			},
 			{
+				"api": {
+					"rest": {
+						"allowCreate": true,
+						"allowDelete": true,
+						"allowGetById": true,
+						"allowList": true,
+						"allowUpdate": true,
+						"basePath": "/entities/comment"
+					},
+					"type": "rest"
+				},
 				"fields": [
 					{
 						"encrypted": false,
@@ -145,8 +186,9 @@ Example output file:
 ```
 
 On the client side, `e2ee-client-backend` can now reconstruct declarative
-`EntitySchema` definitions from `expectedSchema.entities` without redefining
-field paths, types, or encryption flags by hand.
+`EntitySchema` definitions from `expectedSchema.entities` and derive default
+`RestCrudAdapter` routes from the exported API metadata, without redefining
+field paths, types, encryption flags, or REST CRUD paths by hand.
 
 The current CLI scaffold already supports:
 
