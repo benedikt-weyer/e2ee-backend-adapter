@@ -124,7 +124,7 @@ mod tests {
                 fs::write(
                         &path,
                         r#"{
-                            "version": 3,
+                            "version": 4,
                             "name": "notes-service",
                             "auth": {
                                 "mode": "password-session",
@@ -214,6 +214,18 @@ mod tests {
                                             "remoteType": "string"
                                         }
                                     ],
+                                    "graphql": {
+                                        "allowCreate": true,
+                                        "allowDelete": true,
+                                        "allowGetById": true,
+                                        "allowList": true,
+                                        "allowUpdate": true,
+                                        "createMutation": "createNote",
+                                        "deleteMutation": "deleteNote",
+                                        "getByIdQuery": "note",
+                                        "listQuery": "notes",
+                                        "updateMutation": "updateNote"
+                                    },
                                     "idPath": "id",
                                     "name": "note",
                                     "rest": {

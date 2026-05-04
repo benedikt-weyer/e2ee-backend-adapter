@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-pub const MANIFEST_VERSION: u32 = 3;
+pub const MANIFEST_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +184,9 @@ impl ExpectedSchemaManifest {
         if self.entity_tables.is_empty() {
             bail!("Expected schema must define entity tables.");
         }
+        for entity in &self.entities {
+            entity.validate()?;
+        }
         for entity_table in &self.entity_tables {
             entity_table.validate()?;
         }
@@ -194,18 +197,48 @@ impl ExpectedSchemaManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaApiManifest {
-    pub rest: ExpectedSchemaRestApiManifest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphql: Option<ExpectedSchemaGraphqlApiManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rest: Option<ExpectedSchemaRestApiManifest>,
     #[serde(rename = "type")]
     pub api_type: String,
 }
 
 impl ExpectedSchemaApiManifest {
     pub fn validate(&self) -> Result<()> {
-        if self.api_type != "rest" {
-            bail!("Only REST generated schema APIs are supported in v1.");
+        match self.api_type.as_str() {
+            "graphql" => self
+                .graphql
+                .as_ref()
+                .ok_or_else(|| anyhow!("Expected schema GraphQL metadata is missing."))?
+                .validate(),
+            "rest" => self
+                .rest
+                .as_ref()
+                .ok_or_else(|| anyhow!("Expected schema REST metadata is missing."))?
+                .validate(),
+            _ => bail!(
+                "Unsupported generated schema API type '{}'.",
+                self.api_type
+            ),
         }
+    }
+}
 
-        self.rest.validate()?;
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedSchemaGraphqlApiManifest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_headers: Option<BTreeMap<String, String>>,
+    pub endpoint_path: String,
+}
+
+impl ExpectedSchemaGraphqlApiManifest {
+    pub fn validate(&self) -> Result<()> {
+        if !self.endpoint_path.starts_with('/') {
+            bail!("Expected schema GraphQL endpoint_path must start with '/'.");
+        }
 
         Ok(())
     }
@@ -304,21 +337,50 @@ pub struct ExpectedSchemaEntityManifest {
     pub table_name: String,
 }
 
+impl ExpectedSchemaEntityManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            bail!("Expected schema entity name must not be empty.");
+        }
+        if self.id_path.trim().is_empty() {
+            bail!("Expected schema entity id_path must not be empty.");
+        }
+        if self.fields.is_empty() {
+            bail!(
+                "Expected schema entity '{}' must define at least one field.",
+                self.name
+            );
+        }
+        self.api.validate()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaEntityApiManifest {
-    pub rest: EntityRestManifest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphql: Option<EntityGraphqlManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rest: Option<EntityRestManifest>,
     #[serde(rename = "type")]
     pub api_type: String,
 }
 
 impl ExpectedSchemaEntityApiManifest {
     pub fn validate(&self) -> Result<()> {
-        if self.api_type != "rest" {
-            bail!("Only REST entity APIs are supported in v1.");
+        match self.api_type.as_str() {
+            "graphql" => self
+                .graphql
+                .as_ref()
+                .ok_or_else(|| anyhow!("Expected schema entity GraphQL metadata is missing."))?
+                .validate(),
+            "rest" => self
+                .rest
+                .as_ref()
+                .ok_or_else(|| anyhow!("Expected schema entity REST metadata is missing."))?
+                .validate(),
+            _ => bail!("Unsupported entity API type '{}'.", self.api_type),
         }
-
-        self.rest.validate()
     }
 }
 
@@ -326,6 +388,7 @@ impl ExpectedSchemaEntityApiManifest {
 #[serde(rename_all = "camelCase")]
 pub struct EntityManifest {
     pub fields: Vec<EntityFieldManifest>,
+    pub graphql: EntityGraphqlManifest,
     pub id_path: String,
     pub name: String,
     pub rest: EntityRestManifest,
@@ -343,7 +406,50 @@ impl EntityManifest {
         if self.fields.is_empty() {
             bail!("Entity '{}' must define at least one field.", self.name);
         }
-        self.rest.validate()
+        self.rest.validate()?;
+        self.graphql.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityGraphqlManifest {
+    pub allow_create: bool,
+    pub allow_delete: bool,
+    pub allow_get_by_id: bool,
+    pub allow_list: bool,
+    pub allow_update: bool,
+    pub create_mutation: String,
+    pub delete_mutation: String,
+    pub get_by_id_query: String,
+    pub list_query: String,
+    pub update_mutation: String,
+}
+
+impl EntityGraphqlManifest {
+    pub fn validate(&self) -> Result<()> {
+        if !(self.allow_create
+            || self.allow_delete
+            || self.allow_get_by_id
+            || self.allow_list
+            || self.allow_update)
+        {
+            bail!("Entity GraphQL manifest must enable at least one operation.");
+        }
+
+        for operation_name in [
+            &self.create_mutation,
+            &self.delete_mutation,
+            &self.get_by_id_query,
+            &self.list_query,
+            &self.update_mutation,
+        ] {
+            if operation_name.trim().is_empty() {
+                bail!("Entity GraphQL operation names must not be empty.");
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -436,8 +542,9 @@ mod tests {
 
         use super::{
             expected_schema_to_pretty_json, parse_manifest, AuthManifest,
-            BackendAdapterManifest, DatabaseManifest, EntityFieldManifest, EntityManifest,
-            EntityRestManifest, ExpectedEntityColumnManifest, ExpectedEntityTableManifest, ExpectedSchemaApiManifest,
+            BackendAdapterManifest, DatabaseManifest, EntityFieldManifest, EntityGraphqlManifest,
+            EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest,
+            ExpectedEntityTableManifest, ExpectedSchemaApiManifest,
             ExpectedSchemaRestApiManifest,
             ExpectedSchemaEntityApiManifest, ExpectedSchemaEntityManifest,
             ExpectedSchemaManifest, MANIFEST_VERSION, RealtimeManifest,
@@ -472,26 +579,28 @@ mod tests {
                                 engine: "postgres".to_owned(),
                                 expected_schema: ExpectedSchemaManifest {
                                         api: ExpectedSchemaApiManifest {
-                                            rest: ExpectedSchemaRestApiManifest {
+                                            graphql: None,
+                                            rest: Some(ExpectedSchemaRestApiManifest {
                                                 base_url: "/api".to_owned(),
                                                 default_headers: Some(BTreeMap::from([(
                                                     "accept".to_owned(),
                                                     "application/json".to_owned(),
                                                 )])),
-                                            },
+                                            }),
                                             api_type: "rest".to_owned(),
                                         },
                                         auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
                                 entities: vec![ExpectedSchemaEntityManifest {
                                     api: ExpectedSchemaEntityApiManifest {
-                                        rest: EntityRestManifest {
+                                        graphql: None,
+                                        rest: Some(EntityRestManifest {
                                             allow_create: true,
                                             allow_delete: true,
                                             allow_get_by_id: true,
                                             allow_list: true,
                                             allow_update: true,
                                             base_path: "/entities/note".to_owned(),
-                                        },
+                                        }),
                                         api_type: "rest".to_owned(),
                                     },
                                     fields: vec![EntityFieldManifest {
@@ -538,6 +647,18 @@ mod tests {
                                         remote_type: "string".to_owned(),
                                         strategy_id: Some("aes-256-gcm".to_owned()),
                                 }],
+                                graphql: EntityGraphqlManifest {
+                                    allow_create: true,
+                                    allow_delete: true,
+                                    allow_get_by_id: true,
+                                    allow_list: true,
+                                    allow_update: true,
+                                    create_mutation: "createNote".to_owned(),
+                                    delete_mutation: "deleteNote".to_owned(),
+                                    get_by_id_query: "note".to_owned(),
+                                    list_query: "notes".to_owned(),
+                                    update_mutation: "updateNote".to_owned(),
+                                },
                                 id_path: "id".to_owned(),
                                 name: "note".to_owned(),
                                 rest: EntityRestManifest {
@@ -567,7 +688,7 @@ mod tests {
         fn parse_manifest_accepts_camel_case_json() {
                 let json = r#"
                 {
-                    "version": 3,
+                    "version": 4,
                     "name": "notes-service",
                     "auth": {
                         "mode": "password-session",
@@ -668,6 +789,18 @@ mod tests {
                                     "strategyId": "aes-256-gcm"
                                 }
                             ],
+                            "graphql": {
+                                "allowCreate": true,
+                                "allowDelete": true,
+                                "allowGetById": true,
+                                "allowList": true,
+                                "allowUpdate": true,
+                                "createMutation": "createNote",
+                                "deleteMutation": "deleteNote",
+                                "getByIdQuery": "note",
+                                "listQuery": "notes",
+                                "updateMutation": "updateNote"
+                            },
                             "idPath": "id",
                             "name": "note",
                             "rest": {

@@ -328,8 +328,8 @@ mod tests {
     };
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
-        EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest, ExpectedEntityTableManifest,
-        ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
+        EntityGraphqlManifest, EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest,
+        ExpectedEntityTableManifest, ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
         ExpectedSchemaRestApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest, RestAuthPaths,
         SessionCookieNames, SessionManifest,
@@ -362,23 +362,25 @@ mod tests {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
                     api: ExpectedSchemaApiManifest {
-                        rest: ExpectedSchemaRestApiManifest {
+                        graphql: None,
+                        rest: Some(ExpectedSchemaRestApiManifest {
                             base_url: "/api".to_owned(),
                             default_headers: None,
-                        },
+                        }),
                         api_type: "rest".to_owned(),
                     },
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
                     entities: vec![ExpectedSchemaEntityManifest {
                         api: ExpectedSchemaEntityApiManifest {
-                            rest: EntityRestManifest {
+                            graphql: None,
+                            rest: Some(EntityRestManifest {
                                 allow_create: true,
                                 allow_delete: true,
                                 allow_get_by_id: true,
                                 allow_list: true,
                                 allow_update: true,
                                 base_path: "/entities/note".to_owned(),
-                            },
+                            }),
                             api_type: "rest".to_owned(),
                         },
                         fields: vec![EntityFieldManifest {
@@ -420,6 +422,18 @@ mod tests {
                     remote_type: "string".to_owned(),
                     strategy_id: None,
                 }],
+                graphql: EntityGraphqlManifest {
+                    allow_create: true,
+                    allow_delete: true,
+                    allow_get_by_id: true,
+                    allow_list: true,
+                    allow_update: true,
+                    create_mutation: "createNote".to_owned(),
+                    delete_mutation: "deleteNote".to_owned(),
+                    get_by_id_query: "note".to_owned(),
+                    list_query: "notes".to_owned(),
+                    update_mutation: "updateNote".to_owned(),
+                },
                 id_path: "id".to_owned(),
                 name: "note".to_owned(),
                 rest: EntityRestManifest {

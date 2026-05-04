@@ -29,6 +29,9 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output, "// Manifest: {}", manifest.name)?;
     writeln!(&mut output)?;
     writeln!(&mut output, "import {{")?;
+    writeln!(&mut output, "  createGraphqlCrudAdapterFromExpectedSchemaEntity,")?;
+    writeln!(&mut output, "  createGraphqlPasswordAuthConfigFromExpectedSchema,")?;
+    writeln!(&mut output, "  createGraphqlTransportFromExpectedSchema,")?;
     writeln!(&mut output, "  createRestTransportFromExpectedSchema,")?;
     writeln!(&mut output, "  createEntitySchemaFromExpectedSchemaEntity,")?;
     writeln!(&mut output, "  createRestCrudAdapterFromExpectedSchemaEntity,")?;
@@ -36,10 +39,15 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output, "  defineClientModel,")?;
     writeln!(&mut output, "  type BackendAdapterExpectedSchemaManifest,")?;
     writeln!(&mut output, "  type ClientModelDefinition,")?;
+    writeln!(&mut output, "  type CreateGeneratedGraphqlAuthOptions,")?;
+    writeln!(&mut output, "  type CreateGeneratedGraphqlTransportOptions,")?;
     writeln!(&mut output, "  type CreateGeneratedRestTransportOptions,")?;
     writeln!(&mut output, "  type CreateGeneratedEntitySchemaOptions,")?;
     writeln!(&mut output, "  type EncryptedFieldValue,")?;
     writeln!(&mut output, "  type EntitySchema,")?;
+    writeln!(&mut output, "  type GraphqlCrudAdapter,")?;
+    writeln!(&mut output, "  type GraphqlPasswordAuthConfig,")?;
+    writeln!(&mut output, "  type GraphqlTransport,")?;
     writeln!(&mut output, "  type FetchRestTransport,")?;
     writeln!(&mut output, "  type RestCrudAdapter,")?;
     writeln!(&mut output, "  type RestPasswordAuthConfig,")?;
@@ -86,6 +94,19 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output, "    endpoints: restAuthEndpoints,")?;
     writeln!(&mut output, "    transport,")?;
     writeln!(&mut output, "  }});")?;
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+    writeln!(&mut output, "export function createGraphqlTransport(")?;
+    writeln!(&mut output, "  options: CreateGeneratedGraphqlTransportOptions = {{}},")?;
+    writeln!(&mut output, "): GraphqlTransport {{")?;
+    writeln!(&mut output, "  return createGraphqlTransportFromExpectedSchema(expectedSchema, options);")?;
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+    writeln!(&mut output, "export function createGraphqlAuthConfig(")?;
+    writeln!(&mut output, "  transport: GraphqlTransport = createGraphqlTransport(),")?;
+    writeln!(&mut output, "  options: CreateGeneratedGraphqlAuthOptions = {{}},")?;
+    writeln!(&mut output, "): GraphqlPasswordAuthConfig<SessionUser> {{")?;
+    writeln!(&mut output, "  return createGraphqlPasswordAuthConfigFromExpectedSchema<SessionUser>(expectedSchema, transport, options);")?;
     writeln!(&mut output, "}}")?;
     writeln!(&mut output)?;
 
@@ -157,6 +178,19 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     }
     writeln!(&mut output, "}}")?;
     writeln!(&mut output)?;
+    writeln!(&mut output, "export interface GeneratedGraphqlCrudAdapters {{")?;
+    for entity in &manifest.database.expected_schema.entities {
+        let alias_base = pascal_case(&entity.name);
+        writeln!(
+            &mut output,
+            "  {}: GraphqlCrudAdapter<{}RemoteRecord, {}Id>;",
+            typescript_property_name(&entity.name),
+            alias_base,
+            alias_base,
+        )?;
+    }
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
 
     writeln!(&mut output, "export interface CreateRestModelsOptions {{")?;
     writeln!(&mut output, "  schemaOptions?: GeneratedSchemaOptions;")?;
@@ -164,8 +198,29 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output, "  transportOptions?: CreateGeneratedRestTransportOptions;")?;
     writeln!(&mut output, "}}")?;
     writeln!(&mut output)?;
+    writeln!(&mut output, "export interface CreateGraphqlModelsOptions {{")?;
+    writeln!(&mut output, "  authOptions?: CreateGeneratedGraphqlAuthOptions;")?;
+    writeln!(&mut output, "  schemaOptions?: GeneratedSchemaOptions;")?;
+    writeln!(&mut output, "  transport?: GraphqlTransport;")?;
+    writeln!(&mut output, "  transportOptions?: CreateGeneratedGraphqlTransportOptions;")?;
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
 
     writeln!(&mut output, "export interface GeneratedRestModels {{")?;
+    for entity in &manifest.database.expected_schema.entities {
+        let alias_base = pascal_case(&entity.name);
+        writeln!(
+            &mut output,
+            "  {}: ClientModelDefinition<EntitySchema<{}Entity, {}RemoteRecord, {}Id>>;",
+            typescript_property_name(&entity.table_name),
+            alias_base,
+            alias_base,
+            alias_base,
+        )?;
+    }
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+    writeln!(&mut output, "export interface GeneratedGraphqlModels {{")?;
     for entity in &manifest.database.expected_schema.entities {
         let alias_base = pascal_case(&entity.name);
         writeln!(
@@ -208,6 +263,34 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output, "  }};")?;
     writeln!(&mut output, "}}")?;
     writeln!(&mut output)?;
+    writeln!(&mut output, "export function createGraphqlModels(")?;
+    writeln!(&mut output, "  options: CreateGraphqlModelsOptions = {{}},")?;
+    writeln!(&mut output, "): GeneratedGraphqlModels {{")?;
+    writeln!(&mut output, "  const transport = options.transport ?? createGraphqlTransport(options.transportOptions ?? {{}});")?;
+    writeln!(&mut output, "  const schemas = createEntitySchemas(options.schemaOptions ?? {{}});")?;
+    writeln!(&mut output, "  const adapters = createGraphqlCrudAdapters(transport);")?;
+    writeln!(&mut output, "  return {{")?;
+    for entity in &manifest.database.expected_schema.entities {
+        writeln!(
+            &mut output,
+            "    {}: defineClientModel({{",
+            typescript_property_name(&entity.table_name),
+        )?;
+        writeln!(
+            &mut output,
+            "      adapter: {},",
+            typescript_member_access("adapters", &entity.name),
+        )?;
+        writeln!(
+            &mut output,
+            "      schema: {},",
+            typescript_member_access("schemas", &entity.name),
+        )?;
+        writeln!(&mut output, "    }}),")?;
+    }
+    writeln!(&mut output, "  }};")?;
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
 
     writeln!(&mut output, "export function createRestCrudAdapters(")?;
     writeln!(&mut output, "  transport: RestTransport = createRestTransport(),")?;
@@ -218,6 +301,26 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
         writeln!(
             &mut output,
             "    {}: createRestCrudAdapterFromExpectedSchemaEntity<{}RemoteRecord, {}Id>(",
+            typescript_property_name(&entity.name),
+            alias_base,
+            alias_base,
+        )?;
+        writeln!(&mut output, "      expectedSchema.entities[{index}]!,")?;
+        writeln!(&mut output, "      transport,")?;
+        writeln!(&mut output, "    ),")?;
+    }
+    writeln!(&mut output, "  }};")?;
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+    writeln!(&mut output, "export function createGraphqlCrudAdapters(")?;
+    writeln!(&mut output, "  transport: GraphqlTransport = createGraphqlTransport(),")?;
+    writeln!(&mut output, "): GeneratedGraphqlCrudAdapters {{")?;
+    writeln!(&mut output, "  return {{")?;
+    for (index, entity) in manifest.database.expected_schema.entities.iter().enumerate() {
+        let alias_base = pascal_case(&entity.name);
+        writeln!(
+            &mut output,
+            "    {}: createGraphqlCrudAdapterFromExpectedSchemaEntity<{}RemoteRecord, {}Id>(",
             typescript_property_name(&entity.name),
             alias_base,
             alias_base,
@@ -380,8 +483,8 @@ mod tests {
     use super::{export_expected_schema, export_typescript_client_bindings};
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
-        EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest, ExpectedEntityTableManifest,
-        ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
+        EntityGraphqlManifest, EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest,
+        ExpectedEntityTableManifest, ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
         ExpectedSchemaRestApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest,
         RestAuthPaths, SessionCookieNames, SessionManifest,
@@ -414,23 +517,25 @@ mod tests {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
                     api: ExpectedSchemaApiManifest {
-                        rest: ExpectedSchemaRestApiManifest {
+                        graphql: None,
+                        rest: Some(ExpectedSchemaRestApiManifest {
                             base_url: "/api".to_owned(),
                             default_headers: None,
-                        },
+                        }),
                         api_type: "rest".to_owned(),
                     },
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
                     entities: vec![ExpectedSchemaEntityManifest {
                         api: ExpectedSchemaEntityApiManifest {
-                            rest: EntityRestManifest {
+                            graphql: None,
+                            rest: Some(EntityRestManifest {
                                 allow_create: true,
                                 allow_delete: true,
                                 allow_get_by_id: true,
                                 allow_list: true,
                                 allow_update: true,
                                 base_path: "/notes".to_owned(),
-                            },
+                            }),
                             api_type: "rest".to_owned(),
                         },
                         fields: vec![
@@ -504,6 +609,18 @@ mod tests {
                     remote_type: "string".to_owned(),
                     strategy_id: None,
                 }],
+                graphql: EntityGraphqlManifest {
+                    allow_create: true,
+                    allow_delete: true,
+                    allow_get_by_id: true,
+                    allow_list: true,
+                    allow_update: true,
+                    create_mutation: "createNote".to_owned(),
+                    delete_mutation: "deleteNote".to_owned(),
+                    get_by_id_query: "note".to_owned(),
+                    list_query: "notes".to_owned(),
+                    update_mutation: "updateNote".to_owned(),
+                },
                 id_path: "id".to_owned(),
                 name: "note".to_owned(),
                 rest: EntityRestManifest {
@@ -540,10 +657,15 @@ mod tests {
         assert!(source.contains("export type NoteEntity = { content: string } & { id: string } & { metadata?: { tags?: unknown[] | null } }"));
         assert!(source.contains("export type NoteRemoteRecord = { content: EncryptedFieldValue } & { id: string } & { metadata?: { tags?: unknown[] | null } }"));
         assert!(source.contains("export function createRestAuthConfig"));
+        assert!(source.contains("export function createGraphqlTransport"));
+        assert!(source.contains("export function createGraphqlAuthConfig"));
         assert!(source.contains("export function createEntitySchemas"));
         assert!(source.contains("export function createRestModels"));
+        assert!(source.contains("export function createGraphqlModels"));
         assert!(source.contains("export function createRestCrudAdapters"));
+        assert!(source.contains("export function createGraphqlCrudAdapters"));
         assert!(source.contains("createRestTransportFromExpectedSchema(expectedSchema, options)"));
+        assert!(source.contains("createGraphqlTransportFromExpectedSchema(expectedSchema, options)"));
         assert!(source.contains("\"/auth/login\""));
     }
 }
