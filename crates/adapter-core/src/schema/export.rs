@@ -80,7 +80,10 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
         writeln!(&mut output)?;
     }
 
-    writeln!(&mut output, "export const expectedSchema = {expected_schema_json} satisfies BackendAdapterExpectedSchemaManifest;")?;
+    writeln!(
+        &mut output,
+        "export const expectedSchema = {expected_schema_json} as unknown as BackendAdapterExpectedSchemaManifest;",
+    )?;
     writeln!(&mut output)?;
     writeln!(&mut output, "export const restAuthEndpoints = {auth_endpoints_json} as const;")?;
     writeln!(&mut output)?;
