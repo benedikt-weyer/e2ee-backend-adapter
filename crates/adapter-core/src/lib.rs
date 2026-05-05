@@ -54,7 +54,24 @@ impl AdapterRuntime {
     }
 
     pub fn router(&self) -> Router {
-        routes::rest::build_router(self.state.clone())
+        let mut router = routes::rest::build_router(self.state.clone());
+
+        if let Some(graphql) = self
+            .state
+            .manifest
+            .database
+            .expected_schema
+            .api
+            .graphql
+            .as_ref()
+        {
+            router = router.merge(routes::graphql::build_router(
+                self.state.clone(),
+                &graphql.endpoint_path,
+            ));
+        }
+
+        router
     }
 
     pub async fn verify_database(&self) -> Result<()> {

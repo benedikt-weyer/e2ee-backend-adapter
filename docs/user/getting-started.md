@@ -5,7 +5,7 @@ The primary integration path is:
 1. generate a backend adapter manifest from `e2ee-client-backend`
 2. point `e2ee-backend-adapter` at that manifest
 3. configure `DATABASE_URL`
-4. run the Rust REST server
+4. run the Rust adapter server
 
 Example:
 
@@ -15,7 +15,7 @@ e2ee-backend-adapter-server \
   --database-url postgres://postgres:postgres@localhost:5432/app
 ```
 
-The current scaffold validates the manifest, connects to PostgreSQL, creates the auth tables it needs if they are missing, and exposes generated route placeholders plus adapter metadata endpoints.
+The current scaffold validates the manifest, connects to PostgreSQL, creates the auth tables it needs if they are missing, and exposes generated route placeholders plus adapter metadata endpoints. When the exported expected schema uses `--api graphql`, the runtime also exposes the configured GraphQL endpoint and GraphQL auth operations alongside the existing REST surface.
 
 Before wiring this into a larger project, read [File Lifecycle](file-lifecycle.md).
 That page explains which files you author, which files are generated, who

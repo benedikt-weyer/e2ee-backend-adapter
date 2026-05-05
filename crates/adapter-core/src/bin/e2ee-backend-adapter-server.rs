@@ -7,7 +7,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(author, version, about = "Run the e2ee backend adapter REST server")]
+#[command(author, version, about = "Run the e2ee backend adapter server")]
 struct Args {
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,

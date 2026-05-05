@@ -4,7 +4,7 @@
 
 It is intended to:
 
-- run the REST server for auth and entity routes
+- run the adapter server for auth, entity routes, and GraphQL when configured
 - connect directly to the configured PostgreSQL database
 - expose optional WebSocket realtime endpoints
 - export generated client schema information from the manifest
