@@ -5,7 +5,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use e2ee_backend_adapter::{
     manifest::{parse_manifest, BackendAdapterManifest},
     schema::{
-        config::{apply_generated_schema_config, GeneratedSchemaConfig},
+        config::{
+            manifest_from_schema_config, scaffold_schema_config_from_database,
+            BackendSchemaConfig, ExportApiKind,
+        },
         diff::{diff_database_against_manifest, SchemaDiffOutputFormat},
         export::{export_expected_schema, export_typescript_client_bindings},
     },
@@ -30,13 +33,21 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
-    ExportExpectedSchema {
+    GenerateSchemaConfig {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
         #[arg(long)]
-        manifest: PathBuf,
+        name: String,
         #[arg(long)]
         out: PathBuf,
+    },
+    ExportExpectedSchema {
         #[arg(long)]
-        schema_config: Option<PathBuf>,
+        schema_config: PathBuf,
+        #[arg(long, value_enum)]
+        api: ApiKind,
+        #[arg(long)]
+        out: PathBuf,
         #[arg(long)]
         typescript_out: Option<PathBuf>,
     },
@@ -53,12 +64,27 @@ enum DiffFormat {
     Sql,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ApiKind {
+    Graphql,
+    Rest,
+}
+
 impl From<DiffFormat> for SchemaDiffOutputFormat {
     fn from(value: DiffFormat) -> Self {
         match value {
             DiffFormat::Json => SchemaDiffOutputFormat::Json,
             DiffFormat::Seaorm => SchemaDiffOutputFormat::Seaorm,
             DiffFormat::Sql => SchemaDiffOutputFormat::Sql,
+        }
+    }
+}
+
+impl From<ApiKind> for ExportApiKind {
+    fn from(value: ApiKind) -> Self {
+        match value {
+            ApiKind::Graphql => ExportApiKind::Graphql,
+            ApiKind::Rest => ExportApiKind::Rest,
         }
     }
 }
@@ -78,17 +104,22 @@ async fn main() -> Result<()> {
             let diff = diff_database_against_manifest(&manifest, &database_url, format.into()).await?;
             fs::write(out, diff)?;
         }
-        Command::ExportExpectedSchema {
-            manifest,
+        Command::GenerateSchemaConfig {
+            database_url,
+            name,
             out,
+        } => {
+            let schema_config = scaffold_schema_config_from_database(&database_url, &name).await?;
+            fs::write(out, schema_config)?;
+        }
+        Command::ExportExpectedSchema {
             schema_config,
+            api,
+            out,
             typescript_out,
         } => {
-            let mut manifest = load_manifest(&manifest)?;
-            if let Some(schema_config) = schema_config {
-                let schema_config = load_schema_config(&schema_config)?;
-                apply_generated_schema_config(&mut manifest, &schema_config)?;
-            }
+            let schema_config = load_schema_config(&schema_config)?;
+            let manifest = manifest_from_schema_config(&schema_config, api.into())?;
             let expected = export_expected_schema(&manifest)?;
             fs::write(out, expected)?;
             if let Some(typescript_out) = typescript_out {
@@ -110,7 +141,7 @@ fn load_manifest(path: &PathBuf) -> Result<BackendAdapterManifest> {
     parse_manifest(&content)
 }
 
-fn load_schema_config(path: &PathBuf) -> Result<GeneratedSchemaConfig> {
+fn load_schema_config(path: &PathBuf) -> Result<BackendSchemaConfig> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read schema config file at {}", path.display()))?;
     serde_json::from_str(&content)
@@ -119,7 +150,7 @@ fn load_schema_config(path: &PathBuf) -> Result<GeneratedSchemaConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_manifest, Args, Command, DiffFormat};
+    use super::{load_manifest, ApiKind, Args, Command, DiffFormat};
         use clap::Parser;
         use std::{
                 fs,
@@ -297,8 +328,10 @@ mod tests {
             let args = Args::try_parse_from([
                 "adapter-cli",
                 "export-expected-schema",
-                "--manifest",
-                "/tmp/manifest.json",
+                "--schema-config",
+                "/tmp/schema-config.json",
+                "--api",
+                "graphql",
                 "--out",
                 "/tmp/expected-schema.json",
                 "--typescript-out",
@@ -308,17 +341,45 @@ mod tests {
 
             match args.command {
                 Command::ExportExpectedSchema {
-                    manifest,
-                    out,
                     schema_config,
+                    api,
+                    out,
                     typescript_out,
                 } => {
-                    assert_eq!(manifest, PathBuf::from("/tmp/manifest.json"));
+                    assert_eq!(schema_config, PathBuf::from("/tmp/schema-config.json"));
+                    assert_eq!(api, ApiKind::Graphql);
                     assert_eq!(out, PathBuf::from("/tmp/expected-schema.json"));
-                    assert_eq!(schema_config, None);
                     assert_eq!(typescript_out, Some(PathBuf::from("/tmp/generated-types.ts")));
                 }
                 other => panic!("expected export-expected-schema command, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn parses_generate_schema_config_arguments() {
+            let args = Args::try_parse_from([
+                "adapter-cli",
+                "generate-schema-config",
+                "--database-url",
+                "postgres://postgres:postgres@localhost:5432/app",
+                "--name",
+                "dashboard",
+                "--out",
+                "/tmp/e2ee-backend.schema-config.json",
+            ])
+            .expect("arguments should parse");
+
+            match args.command {
+                Command::GenerateSchemaConfig {
+                    database_url,
+                    name,
+                    out,
+                } => {
+                    assert_eq!(database_url, "postgres://postgres:postgres@localhost:5432/app");
+                    assert_eq!(name, "dashboard");
+                    assert_eq!(out, PathBuf::from("/tmp/e2ee-backend.schema-config.json"));
+                }
+                other => panic!("expected generate-schema-config command, got {other:?}"),
             }
         }
 

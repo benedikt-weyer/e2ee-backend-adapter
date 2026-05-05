@@ -21,13 +21,13 @@ what is safe to edit manually, see [File Lifecycle](file-lifecycle.md).
 The adapter can also export a separate generated schema file for client-side
 consumption, but it does not read that generated file back at runtime.
 
-`export-expected-schema` writes a JSON representation of the manifest's expected
-client-facing schema shape. It is not SQL DDL and it is not a migration file.
+`export-expected-schema` writes a JSON representation of the backend schema
+config's expected client-facing shape. It is not SQL DDL and it is not a
+migration file.
 
-If you pass `--schema-config`, the adapter also merges extra schema metadata into
-the exported `expected-schema.json` and generated TypeScript bindings. This is
-useful for encrypted object fields, where the database only knows about
-ciphertext and nonce columns and cannot infer the decrypted client-side shape.
+The schema config is the user-authored source of truth for export generation.
+It carries the full logical entity structure, including encrypted and
+non-encrypted fields. Auth is still implicit and fixed by the adapter.
 
 If you also pass `--typescript-out`, the adapter writes a generated TypeScript
 companion module alongside the JSON export. For now, TypeScript is the only
@@ -37,20 +37,20 @@ Example export workflow:
 
 ```bash
 e2ee-backend-adapter-cli export-expected-schema \
-	--manifest ./generated/e2ee-backend.manifest.json \
-	--schema-config ./generated/e2ee-backend.schema-config.json \
+	--schema-config ./e2ee-backend.schema-config.json \
+	--api graphql \
 	--out ./generated/expected-schema.json \
 	--typescript-out ./generated/e2ee-client-bindings.ts
 ```
 
-## Metadata Config File
+## Backend Schema Config File
 
-The metadata config file is an optional JSON file consumed only during schema
-export. The runtime server does not read it when serving requests, and database
-diffing does not use it.
+The backend schema config file is a user-authored JSON file consumed during
+schema export. The runtime server does not read it when serving requests, and
+database diffing still works from the manifest/runtime contract.
 
-Use it when a generated field type needs richer client-side metadata than the
-manifest or database can infer on their own.
+Use it to define the full logical client-facing structure that the database
+alone cannot infer on its own.
 
 The common case is an encrypted field like `config` that is stored in the
 database as ciphertext and nonce columns, but should appear in generated client
@@ -60,6 +60,35 @@ The top-level shape is:
 
 ```json
 {
+	"name": "my-backend",
+	"entities": [
+		{
+			"name": "integration",
+			"tableName": "integrations",
+			"idPath": "id",
+			"database": {
+				"primaryKey": "id",
+				"columns": [
+					{ "columnName": "id", "nullable": false, "sqlType": "UUID" },
+					{ "columnName": "config_ciphertext", "nullable": true, "sqlType": "BYTEA" },
+					{ "columnName": "config_nonce", "nullable": true, "sqlType": "BYTEA" }
+				]
+			},
+			"fields": [
+				{
+					"encrypted": true,
+					"entityPath": "config",
+					"entitySchema": { "ref": "PlanderaConfig", "nullable": true },
+					"remotePath": "configEnvelope"
+				},
+				{
+					"encrypted": false,
+					"entityPath": "displayName",
+					"entitySchema": { "schema": { "type": "string" } }
+				}
+			]
+		}
+	],
 	"types": {
 		"PlanderaConfig": {
 			"schema": {
@@ -75,36 +104,45 @@ The top-level shape is:
 				}
 			}
 		}
-	},
-	"encryptedFields": [
-		{
-			"tableName": "integrations",
-			"entityPath": "config",
-			"entitySchema": { "ref": "PlanderaConfig" }
-		}
-	]
+	}
 }
 ```
 
 ### Top-Level Keys
 
+- `name`: backend/schema name used in generated outputs
+- `entities`: exported entities, their DB mapping, and logical field structure
 - `types`: named reusable schema nodes that other entries can reference with
   `{"ref": "TypeName"}`
-- `encryptedFields`: mappings that attach richer schema metadata to exported
-  encrypted fields
 
-### Encrypted Field Mappings
+### Entity Field Entries
 
-Each entry in `encryptedFields` supports:
+Each entity field entry supports:
 
-- `entityName`: optional exported entity name to match, such as `integration`
-- `tableName`: optional exported table name to match, such as `integrations`
-- `entityPath`: required logical entity field path, such as `config`
-- `entitySchema`: required schema node for the decrypted entity-side value
-- `remoteSchema`: optional schema node for the remote-side value when you need a
-  richer non-default remote shape
+- `encrypted`: whether the field is transported as an encrypted envelope
+- `entityPath`: logical client-side field path, such as `config`
+- `entitySchema`: schema node for the entity-side value
+- `remotePath`: optional remote/API field name override, such as `configEnvelope`
+- `remoteSchema`: optional remote-side schema override when the API shape differs
+- `strategyId`: optional encryption strategy override
 
-At least one of `entityName` or `tableName` must be present.
+The schema config can also include optional per-entity `graphql` or `rest`
+override blocks when the backend API names do not follow adapter conventions.
+
+### Scaffolding From The Database
+
+You can scaffold a starting schema config from Postgres metadata:
+
+```bash
+e2ee-backend-adapter-cli generate-schema-config \
+	--database-url postgres://postgres:postgres@localhost:5432/app \
+	--name my-backend \
+	--out ./e2ee-backend.schema-config.json
+```
+
+This scaffolds tables, columns, primary keys, basic scalar types, and encrypted
+`*_ciphertext`/`*_nonce` pairs. It does not replace manual modeling of the
+final decrypted object structure.
 
 ### Schema Nodes
 

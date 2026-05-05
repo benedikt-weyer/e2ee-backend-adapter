@@ -412,7 +412,7 @@ fn typescript_type_for_node(node: &SchemaNodeManifest) -> String {
 fn typescript_type_for_descriptor(descriptor: &SchemaDescriptorManifest) -> String {
     match descriptor {
         SchemaDescriptorManifest::Array { items } => {
-            format!("{}[]", typescript_type_for_node(items))
+            format!("{}[]", parenthesize_typescript_array_item_type(items))
         }
         SchemaDescriptorManifest::Boolean => "boolean".to_owned(),
         SchemaDescriptorManifest::DiscriminatedUnion { options, .. }
@@ -482,6 +482,16 @@ fn typescript_type_for_descriptor(descriptor: &SchemaDescriptorManifest) -> Stri
         }
         SchemaDescriptorManifest::String => "string".to_owned(),
         SchemaDescriptorManifest::Unknown => "unknown".to_owned(),
+    }
+}
+
+fn parenthesize_typescript_array_item_type(items: &SchemaNodeManifest) -> String {
+    let item_type = typescript_type_for_node(items);
+
+    if item_type.contains(" | ") || item_type.contains(" & ") {
+        format!("({item_type})")
+    } else {
+        item_type
     }
 }
 
@@ -585,6 +595,8 @@ fn pascal_case(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{export_expected_schema, export_typescript_client_bindings};
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
@@ -592,7 +604,7 @@ mod tests {
         ExpectedEntityTableManifest, ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
         ExpectedSchemaRestApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest,
-        RestAuthPaths, SessionCookieNames, SessionManifest,
+        RestAuthPaths, SchemaDescriptorManifest, SessionCookieNames, SessionManifest,
     };
 
     fn manifest() -> BackendAdapterManifest {
@@ -780,5 +792,56 @@ mod tests {
         assert!(source.contains("createRestTransportFromExpectedSchema(expectedSchema, options)"));
         assert!(source.contains("createGraphqlTransportFromExpectedSchema(expectedSchema, options)"));
         assert!(source.contains("\"/auth/login\""));
+    }
+
+    #[test]
+    fn export_typescript_client_bindings_parenthesizes_union_array_items() {
+        let item_type = super::typescript_type_for_descriptor(&SchemaDescriptorManifest::Array {
+            items: Box::new(crate::manifest::SchemaNodeManifest {
+                nullable: None,
+                optional: None,
+                schema: SchemaDescriptorManifest::DiscriminatedUnion {
+                    discriminator: "type".to_owned(),
+                    options: vec![
+                        crate::manifest::SchemaNodeManifest {
+                            nullable: None,
+                            optional: None,
+                            schema: SchemaDescriptorManifest::Object {
+                                additional_properties: None,
+                                properties: Some(BTreeMap::from([( 
+                                    "type".to_owned(),
+                                    crate::manifest::SchemaNodeManifest {
+                                        nullable: None,
+                                        optional: None,
+                                        schema: SchemaDescriptorManifest::Literal {
+                                            value: serde_json::Value::String("a".to_owned()),
+                                        },
+                                    },
+                                )])),
+                            },
+                        },
+                        crate::manifest::SchemaNodeManifest {
+                            nullable: None,
+                            optional: None,
+                            schema: SchemaDescriptorManifest::Object {
+                                additional_properties: None,
+                                properties: Some(BTreeMap::from([( 
+                                    "type".to_owned(),
+                                    crate::manifest::SchemaNodeManifest {
+                                        nullable: None,
+                                        optional: None,
+                                        schema: SchemaDescriptorManifest::Literal {
+                                            value: serde_json::Value::String("b".to_owned()),
+                                        },
+                                    },
+                                )])),
+                            },
+                        },
+                    ],
+                },
+            }),
+        });
+
+        assert_eq!(item_type, "({ type: \"a\" } | { type: \"b\" })[]");
     }
 }
