@@ -22,9 +22,14 @@ For generated client schema files, use the CLI export command:
 ```bash
 e2ee-backend-adapter-cli export-expected-schema \
   --manifest ./generated/e2ee-backend.manifest.json \
+  --schema-config ./generated/e2ee-backend.schema-config.json \
   --out ./generated/expected-schema.json \
   --typescript-out ./generated/e2ee-client-bindings.ts
 ```
+
+If you do not need extra metadata for encrypted object fields, `--schema-config`
+is optional. When provided, it enriches the exported client schema with typed
+metadata for fields such as encrypted `config` objects.
 
 For database reconciliation workflows, use `diff`, which now writes SQL by
 default:

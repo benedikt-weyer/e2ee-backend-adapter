@@ -21,6 +21,11 @@ consumption, but it does not read that generated file back at runtime.
 `export-expected-schema` writes a JSON representation of the manifest's expected
 client-facing schema shape. It is not SQL DDL and it is not a migration file.
 
+If you pass `--schema-config`, the adapter also merges extra schema metadata into
+the exported `expected-schema.json` and generated TypeScript bindings. This is
+useful for encrypted object fields, where the database only knows about
+ciphertext and nonce columns and cannot infer the decrypted client-side shape.
+
 If you also pass `--typescript-out`, the adapter writes a generated TypeScript
 companion module alongside the JSON export. For now, TypeScript is the only
 supported language target.
@@ -30,9 +35,207 @@ Example export workflow:
 ```bash
 e2ee-backend-adapter-cli export-expected-schema \
 	--manifest ./generated/e2ee-backend.manifest.json \
+	--schema-config ./generated/e2ee-backend.schema-config.json \
 	--out ./generated/expected-schema.json \
 	--typescript-out ./generated/e2ee-client-bindings.ts
 ```
+
+## Metadata Config File
+
+The metadata config file is an optional JSON file consumed only during schema
+export. The runtime server does not read it when serving requests, and database
+diffing does not use it.
+
+Use it when a generated field type needs richer client-side metadata than the
+manifest or database can infer on their own.
+
+The common case is an encrypted field like `config` that is stored in the
+database as ciphertext and nonce columns, but should appear in generated client
+types as a structured object such as `PlanderaConfig` or `DashboardConfig`.
+
+The top-level shape is:
+
+```json
+{
+	"types": {
+		"PlanderaConfig": {
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"apiUrl": { "schema": { "type": "string" } },
+					"authHash": {
+						"nullable": true,
+						"schema": { "type": "string" }
+					},
+					"username": { "schema": { "type": "string" } }
+				}
+			}
+		}
+	},
+	"encryptedFields": [
+		{
+			"tableName": "integrations",
+			"entityPath": "config",
+			"entitySchema": { "ref": "PlanderaConfig" }
+		}
+	]
+}
+```
+
+### Top-Level Keys
+
+- `types`: named reusable schema nodes that other entries can reference with
+  `{"ref": "TypeName"}`
+- `encryptedFields`: mappings that attach richer schema metadata to exported
+  encrypted fields
+
+### Encrypted Field Mappings
+
+Each entry in `encryptedFields` supports:
+
+- `entityName`: optional exported entity name to match, such as `integration`
+- `tableName`: optional exported table name to match, such as `integrations`
+- `entityPath`: required logical entity field path, such as `config`
+- `entitySchema`: required schema node for the decrypted entity-side value
+- `remoteSchema`: optional schema node for the remote-side value when you need a
+  richer non-default remote shape
+
+At least one of `entityName` or `tableName` must be present.
+
+### Schema Nodes
+
+Each schema node can either inline a schema:
+
+```json
+{
+	"nullable": true,
+	"schema": { "type": "string" }
+}
+```
+
+or reference a named type:
+
+```json
+{
+	"ref": "PlanderaConfig"
+}
+```
+
+Nodes support optional `nullable` and `optional` flags on top of the base
+schema.
+
+Supported schema descriptors are:
+
+- `string`
+- `number` with optional `integer: true`
+- `boolean`
+- `literal`
+- `enum`
+- `object`
+- `record`
+- `array`
+- `union`
+- `discriminatedUnion`
+- `unknown`
+
+### Example: Reusable Encrypted Object Type
+
+```json
+{
+	"types": {
+		"PlanderaConfig": {
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"apiUrl": { "schema": { "type": "string" } },
+					"authHash": {
+						"nullable": true,
+						"schema": { "type": "string" }
+					},
+					"encryptionKey": {
+						"nullable": true,
+						"schema": { "type": "string" }
+					},
+					"providerSecret": {
+						"nullable": true,
+						"schema": { "type": "string" }
+					},
+					"username": { "schema": { "type": "string" } }
+				}
+			}
+		}
+	},
+	"encryptedFields": [
+		{
+			"entityName": "integration",
+			"entityPath": "config",
+			"entitySchema": { "ref": "PlanderaConfig" }
+		}
+	]
+}
+```
+
+This causes the generated TypeScript bindings to emit `config` as a structured
+object type instead of the fallback `Record<string, unknown> | null`.
+
+### Example: Discriminated Dashboard Config
+
+```json
+{
+	"types": {
+		"DashboardTile": {
+			"schema": {
+				"type": "discriminatedUnion",
+				"discriminator": "type",
+				"options": [
+					{
+						"schema": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"type": {
+									"schema": { "type": "literal", "value": "markdown" }
+								},
+								"title": { "schema": { "type": "string" } }
+							}
+						}
+					}
+				]
+			}
+		},
+		"DashboardConfig": {
+			"schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"version": {
+						"schema": { "type": "literal", "value": 1 }
+					},
+					"tiles": {
+						"schema": {
+							"type": "array",
+							"items": { "ref": "DashboardTile" }
+						}
+					}
+				}
+			}
+		}
+	},
+	"encryptedFields": [
+		{
+			"tableName": "dashboards",
+			"entityPath": "config",
+			"entitySchema": { "ref": "DashboardConfig" }
+		}
+	]
+}
+```
+
+This is the pattern to use when your encrypted config contains nested arrays,
+discriminated unions, or other richer client-side structure that the database
+cannot express directly.
 
 The exported shape is:
 
@@ -122,6 +325,8 @@ This describes:
 - per-entity default REST route metadata or GraphQL operation names derived from the adapter config
 - per-entity field metadata including logical field names, remote field names,
   data types, nullability, optionality, and whether a field is e2ee-encrypted
+- optional richer field schema metadata such as `entitySchema` and `remoteSchema`
+	when a schema config file was provided during export
 
 For GraphQL exports, the `api` and per-entity `api` blocks switch to GraphQL metadata instead:
 
