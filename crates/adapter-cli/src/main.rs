@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use e2ee_backend_adapter::{
     manifest::{parse_manifest, BackendAdapterManifest},
     schema::{
+        config::{apply_generated_schema_config, GeneratedSchemaConfig},
         diff::{diff_database_against_manifest, SchemaDiffOutputFormat},
         export::{export_expected_schema, export_typescript_client_bindings},
     },
@@ -34,6 +35,8 @@ enum Command {
         manifest: PathBuf,
         #[arg(long)]
         out: PathBuf,
+        #[arg(long)]
+        schema_config: Option<PathBuf>,
         #[arg(long)]
         typescript_out: Option<PathBuf>,
     },
@@ -78,9 +81,14 @@ async fn main() -> Result<()> {
         Command::ExportExpectedSchema {
             manifest,
             out,
+            schema_config,
             typescript_out,
         } => {
-            let manifest = load_manifest(&manifest)?;
+            let mut manifest = load_manifest(&manifest)?;
+            if let Some(schema_config) = schema_config {
+                let schema_config = load_schema_config(&schema_config)?;
+                apply_generated_schema_config(&mut manifest, &schema_config)?;
+            }
             let expected = export_expected_schema(&manifest)?;
             fs::write(out, expected)?;
             if let Some(typescript_out) = typescript_out {
@@ -100,6 +108,13 @@ fn load_manifest(path: &PathBuf) -> Result<BackendAdapterManifest> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read manifest file at {}", path.display()))?;
     parse_manifest(&content)
+}
+
+fn load_schema_config(path: &PathBuf) -> Result<GeneratedSchemaConfig> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read schema config file at {}", path.display()))?;
+    serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse schema config file at {}", path.display()))
 }
 
 #[cfg(test)]

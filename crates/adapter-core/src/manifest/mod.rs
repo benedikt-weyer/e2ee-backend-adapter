@@ -486,14 +486,72 @@ impl EntityRestManifest {
 #[serde(rename_all = "camelCase")]
 pub struct EntityFieldManifest {
     pub encrypted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_schema: Option<SchemaNodeManifest>,
     pub entity_path: String,
     pub entity_type: String,
     pub nullable: bool,
     pub optional: bool,
     pub remote_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_schema: Option<SchemaNodeManifest>,
     pub remote_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strategy_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaNodeManifest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nullable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
+    pub schema: SchemaDescriptorManifest,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum SchemaDescriptorManifest {
+    Array {
+        items: Box<SchemaNodeManifest>,
+    },
+    Boolean,
+    DiscriminatedUnion {
+        discriminator: String,
+        options: Vec<SchemaNodeManifest>,
+    },
+    Enum {
+        values: Vec<String>,
+    },
+    Literal {
+        value: serde_json::Value,
+    },
+    Number {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        integer: Option<bool>,
+    },
+    Object {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        additional_properties: Option<SchemaAdditionalPropertiesManifest>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        properties: Option<std::collections::BTreeMap<String, SchemaNodeManifest>>,
+    },
+    Record {
+        values: Box<SchemaNodeManifest>,
+    },
+    String,
+    Union {
+        options: Vec<SchemaNodeManifest>,
+    },
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum SchemaAdditionalPropertiesManifest {
+    Boolean(bool),
+    Schema(Box<SchemaNodeManifest>),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -606,11 +664,13 @@ mod tests {
                                     },
                                     fields: vec![EntityFieldManifest {
                                         encrypted: true,
+                                        entity_schema: None,
                                         entity_path: "content".to_owned(),
                                         entity_type: "string".to_owned(),
                                         nullable: false,
                                         optional: false,
                                         remote_path: "ciphertext".to_owned(),
+                                        remote_schema: None,
                                         remote_type: "string".to_owned(),
                                         strategy_id: Some("aes-256-gcm".to_owned()),
                                     }],
@@ -640,11 +700,13 @@ mod tests {
                         entities: vec![EntityManifest {
                                 fields: vec![EntityFieldManifest {
                                         encrypted: true,
+                                    entity_schema: None,
                                         entity_path: "content".to_owned(),
                                         entity_type: "string".to_owned(),
                                         nullable: false,
                                         optional: false,
                                         remote_path: "ciphertext".to_owned(),
+                                    remote_schema: None,
                                         remote_type: "string".to_owned(),
                                         strategy_id: Some("aes-256-gcm".to_owned()),
                                 }],

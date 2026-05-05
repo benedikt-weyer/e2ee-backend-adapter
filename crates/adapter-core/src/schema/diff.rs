@@ -385,11 +385,13 @@ mod tests {
                         },
                         fields: vec![EntityFieldManifest {
                             encrypted: false,
+                            entity_schema: None,
                             entity_path: "id".to_owned(),
                             entity_type: "string".to_owned(),
                             nullable: false,
                             optional: false,
                             remote_path: "id".to_owned(),
+                            remote_schema: None,
                             remote_type: "string".to_owned(),
                             strategy_id: None,
                         }],
@@ -414,11 +416,13 @@ mod tests {
             entities: vec![EntityManifest {
                 fields: vec![EntityFieldManifest {
                     encrypted: false,
+                    entity_schema: None,
                     entity_path: "id".to_owned(),
                     entity_type: "string".to_owned(),
                     nullable: false,
                     optional: false,
                     remote_path: "id".to_owned(),
+                    remote_schema: None,
                     remote_type: "string".to_owned(),
                     strategy_id: None,
                 }],

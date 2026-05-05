@@ -3,7 +3,10 @@ use std::fmt::Write;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::manifest::{BackendAdapterManifest, EntityFieldManifest, ExpectedSchemaManifest};
+use crate::manifest::{
+    BackendAdapterManifest, EntityFieldManifest, ExpectedSchemaManifest,
+    SchemaAdditionalPropertiesManifest, SchemaDescriptorManifest, SchemaNodeManifest,
+};
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -374,9 +377,13 @@ fn typescript_field_type(field: &EntityFieldManifest, remote: bool) -> String {
     let base = if remote && field.encrypted {
         "EncryptedFieldValue".to_owned()
     } else if remote {
+        field.remote_schema.as_ref().map(typescript_type_for_node)
+            .unwrap_or_else(|| typescript_scalar_type(&field.remote_type).to_owned())
+    } else if remote {
         typescript_scalar_type(&field.remote_type).to_owned()
     } else {
-        typescript_scalar_type(&field.entity_type).to_owned()
+        field.entity_schema.as_ref().map(typescript_type_for_node)
+            .unwrap_or_else(|| typescript_scalar_type(&field.entity_type).to_owned())
     };
 
     if field.nullable {
@@ -384,6 +391,101 @@ fn typescript_field_type(field: &EntityFieldManifest, remote: bool) -> String {
     } else {
         base
     }
+}
+
+fn typescript_type_for_node(node: &SchemaNodeManifest) -> String {
+    let base = typescript_type_for_descriptor(&node.schema);
+    let nullable = node.nullable == Some(true);
+    let optional = node.optional == Some(true);
+
+    match (nullable, optional) {
+        (true, true) => format!("{base} | null | undefined"),
+        (true, false) => format!("{base} | null"),
+        (false, true) => format!("{base} | undefined"),
+        (false, false) => base,
+    }
+}
+
+fn typescript_type_for_descriptor(descriptor: &SchemaDescriptorManifest) -> String {
+    match descriptor {
+        SchemaDescriptorManifest::Array { items } => {
+            format!("{}[]", typescript_type_for_node(items))
+        }
+        SchemaDescriptorManifest::Boolean => "boolean".to_owned(),
+        SchemaDescriptorManifest::DiscriminatedUnion { options, .. }
+        | SchemaDescriptorManifest::Union { options } => options
+            .iter()
+            .map(typescript_type_for_node)
+            .collect::<Vec<_>>()
+            .join(" | "),
+        SchemaDescriptorManifest::Enum { values } => values
+            .iter()
+            .map(|value| format!("\"{}\"", value.replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(" | "),
+        SchemaDescriptorManifest::Literal { value } => {
+            if let Some(text) = value.as_str() {
+                format!("\"{}\"", text.replace('"', "\\\""))
+            } else if let Some(number) = value.as_i64() {
+                number.to_string()
+            } else if let Some(number) = value.as_u64() {
+                number.to_string()
+            } else if let Some(number) = value.as_f64() {
+                number.to_string()
+            } else if let Some(flag) = value.as_bool() {
+                flag.to_string()
+            } else {
+                "null".to_owned()
+            }
+        }
+        SchemaDescriptorManifest::Number { .. } => "number".to_owned(),
+        SchemaDescriptorManifest::Object {
+            additional_properties,
+            properties,
+        } => {
+            let property_fragments = properties
+                .iter()
+                .flat_map(|properties| properties.iter())
+                .map(|(name, schema)| {
+                    let optional_marker = if schema.optional == Some(true) { "?" } else { "" };
+                    format!(
+                        "{}{}: {}",
+                        typescript_property_name(name),
+                        optional_marker,
+                        typescript_type_for_node_without_optional(schema),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let object_fragment = if property_fragments.is_empty() {
+                "Record<string, never>".to_owned()
+            } else {
+                format!("{{ {} }}", property_fragments.join("; "))
+            };
+
+            match additional_properties {
+                Some(SchemaAdditionalPropertiesManifest::Boolean(false)) | None => object_fragment,
+                Some(SchemaAdditionalPropertiesManifest::Boolean(true)) => {
+                    format!("{} & Record<string, unknown>", object_fragment)
+                }
+                Some(SchemaAdditionalPropertiesManifest::Schema(schema)) => format!(
+                    "{} & Record<string, {}>",
+                    object_fragment,
+                    typescript_type_for_node(schema),
+                ),
+            }
+        }
+        SchemaDescriptorManifest::Record { values } => {
+            format!("Record<string, {}>", typescript_type_for_node(values))
+        }
+        SchemaDescriptorManifest::String => "string".to_owned(),
+        SchemaDescriptorManifest::Unknown => "unknown".to_owned(),
+    }
+}
+
+fn typescript_type_for_node_without_optional(node: &SchemaNodeManifest) -> String {
+    let mut node = node.clone();
+    node.optional = None;
+    typescript_type_for_node(&node)
 }
 
 fn typescript_scalar_type(schema_type: &str) -> &'static str {
@@ -541,31 +643,37 @@ mod tests {
                         fields: vec![
                             EntityFieldManifest {
                                 encrypted: true,
+                                entity_schema: None,
                                 entity_path: "content".to_owned(),
                                 entity_type: "string".to_owned(),
                                 nullable: false,
                                 optional: false,
                                 remote_path: "content".to_owned(),
+                                remote_schema: None,
                                 remote_type: "string".to_owned(),
                                 strategy_id: Some("aes-256-gcm".to_owned()),
                             },
                             EntityFieldManifest {
                                 encrypted: false,
+                                entity_schema: None,
                                 entity_path: "id".to_owned(),
                                 entity_type: "string".to_owned(),
                                 nullable: false,
                                 optional: false,
                                 remote_path: "id".to_owned(),
+                                remote_schema: None,
                                 remote_type: "string".to_owned(),
                                 strategy_id: None,
                             },
                             EntityFieldManifest {
                                 encrypted: false,
+                                entity_schema: None,
                                 entity_path: "metadata.tags".to_owned(),
                                 entity_type: "array".to_owned(),
                                 nullable: true,
                                 optional: true,
                                 remote_path: "metadata.tags".to_owned(),
+                                remote_schema: None,
                                 remote_type: "array".to_owned(),
                                 strategy_id: None,
                             },
@@ -601,11 +709,13 @@ mod tests {
             entities: vec![EntityManifest {
                 fields: vec![EntityFieldManifest {
                     encrypted: false,
+                    entity_schema: None,
                     entity_path: "id".to_owned(),
                     entity_type: "string".to_owned(),
                     nullable: false,
                     optional: false,
                     remote_path: "id".to_owned(),
+                    remote_schema: None,
                     remote_type: "string".to_owned(),
                     strategy_id: None,
                 }],
