@@ -310,10 +310,12 @@ mod tests {
                 Command::ExportExpectedSchema {
                     manifest,
                     out,
+                    schema_config,
                     typescript_out,
                 } => {
                     assert_eq!(manifest, PathBuf::from("/tmp/manifest.json"));
                     assert_eq!(out, PathBuf::from("/tmp/expected-schema.json"));
+                    assert_eq!(schema_config, None);
                     assert_eq!(typescript_out, Some(PathBuf::from("/tmp/generated-types.ts")));
                 }
                 other => panic!("expected export-expected-schema command, got {other:?}"),
