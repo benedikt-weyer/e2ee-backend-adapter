@@ -6,8 +6,9 @@ use e2ee_backend_adapter::{
     manifest::{parse_manifest, BackendAdapterManifest},
     schema::{
         config::{
-            manifest_from_schema_config, scaffold_schema_config_from_database,
-            BackendSchemaConfig, ExportApiKind,
+            apply_encrypted_schema_config, manifest_from_db_schema_config,
+            scaffold_db_schema_config_from_database, BackendDbSchemaConfig,
+            EncryptedSchemaConfig, ExportApiKind,
         },
         diff::{diff_database_against_manifest, SchemaDiffOutputFormat},
         export::{export_expected_schema, export_typescript_client_bindings},
@@ -33,7 +34,7 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
-    GenerateSchemaConfig {
+    GenerateDbSchemaConfig {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
         #[arg(long)]
@@ -43,7 +44,9 @@ enum Command {
     },
     ExportExpectedSchema {
         #[arg(long)]
-        schema_config: PathBuf,
+        db_schema_config: PathBuf,
+        #[arg(long)]
+        encrypted_schema_config: Option<PathBuf>,
         #[arg(long, value_enum)]
         api: ApiKind,
         #[arg(long)]
@@ -104,22 +107,28 @@ async fn main() -> Result<()> {
             let diff = diff_database_against_manifest(&manifest, &database_url, format.into()).await?;
             fs::write(out, diff)?;
         }
-        Command::GenerateSchemaConfig {
+        Command::GenerateDbSchemaConfig {
             database_url,
             name,
             out,
         } => {
-            let schema_config = scaffold_schema_config_from_database(&database_url, &name).await?;
+            let schema_config = scaffold_db_schema_config_from_database(&database_url, &name).await?;
             fs::write(out, schema_config)?;
         }
         Command::ExportExpectedSchema {
-            schema_config,
+            db_schema_config,
+            encrypted_schema_config,
             api,
             out,
             typescript_out,
         } => {
-            let schema_config = load_schema_config(&schema_config)?;
-            let manifest = manifest_from_schema_config(&schema_config, api.into())?;
+            let export_api = ExportApiKind::from(api);
+            let db_schema_config = load_db_schema_config(&db_schema_config)?;
+            let mut manifest = manifest_from_db_schema_config(&db_schema_config, export_api)?;
+            if let Some(encrypted_schema_config) = encrypted_schema_config.as_ref() {
+                let encrypted_schema_config = load_encrypted_schema_config(encrypted_schema_config)?;
+                apply_encrypted_schema_config(&mut manifest, &encrypted_schema_config, export_api)?;
+            }
             let expected = export_expected_schema(&manifest)?;
             fs::write(out, expected)?;
             if let Some(typescript_out) = typescript_out {
@@ -141,11 +150,18 @@ fn load_manifest(path: &PathBuf) -> Result<BackendAdapterManifest> {
     parse_manifest(&content)
 }
 
-fn load_schema_config(path: &PathBuf) -> Result<BackendSchemaConfig> {
+fn load_db_schema_config(path: &PathBuf) -> Result<BackendDbSchemaConfig> {
     let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read schema config file at {}", path.display()))?;
+        .with_context(|| format!("Failed to read DB schema config file at {}", path.display()))?;
     serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse schema config file at {}", path.display()))
+        .with_context(|| format!("Failed to parse DB schema config file at {}", path.display()))
+}
+
+fn load_encrypted_schema_config(path: &PathBuf) -> Result<EncryptedSchemaConfig> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read encrypted schema config file at {}", path.display()))?;
+    serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse encrypted schema config file at {}", path.display()))
 }
 
 #[cfg(test)]
@@ -328,8 +344,10 @@ mod tests {
             let args = Args::try_parse_from([
                 "adapter-cli",
                 "export-expected-schema",
-                "--schema-config",
-                "/tmp/schema-config.json",
+            "--db-schema-config",
+            "/tmp/db-schema.json",
+            "--encrypted-schema-config",
+            "/tmp/encrypted-schema.json",
                 "--api",
                 "graphql",
                 "--out",
@@ -341,12 +359,17 @@ mod tests {
 
             match args.command {
                 Command::ExportExpectedSchema {
-                    schema_config,
+                    db_schema_config,
+                    encrypted_schema_config,
                     api,
                     out,
                     typescript_out,
                 } => {
-                    assert_eq!(schema_config, PathBuf::from("/tmp/schema-config.json"));
+                    assert_eq!(db_schema_config, PathBuf::from("/tmp/db-schema.json"));
+                    assert_eq!(
+                        encrypted_schema_config,
+                        Some(PathBuf::from("/tmp/encrypted-schema.json"))
+                    );
                     assert_eq!(api, ApiKind::Graphql);
                     assert_eq!(out, PathBuf::from("/tmp/expected-schema.json"));
                     assert_eq!(typescript_out, Some(PathBuf::from("/tmp/generated-types.ts")));
@@ -356,30 +379,30 @@ mod tests {
         }
 
         #[test]
-        fn parses_generate_schema_config_arguments() {
+        fn parses_generate_db_schema_config_arguments() {
             let args = Args::try_parse_from([
                 "adapter-cli",
-                "generate-schema-config",
+                "generate-db-schema-config",
                 "--database-url",
                 "postgres://postgres:postgres@localhost:5432/app",
                 "--name",
                 "dashboard",
                 "--out",
-                "/tmp/e2ee-backend.schema-config.json",
+                "/tmp/e2ee-backend.db-schema.json",
             ])
             .expect("arguments should parse");
 
             match args.command {
-                Command::GenerateSchemaConfig {
+                Command::GenerateDbSchemaConfig {
                     database_url,
                     name,
                     out,
                 } => {
                     assert_eq!(database_url, "postgres://postgres:postgres@localhost:5432/app");
                     assert_eq!(name, "dashboard");
-                    assert_eq!(out, PathBuf::from("/tmp/e2ee-backend.schema-config.json"));
+                    assert_eq!(out, PathBuf::from("/tmp/e2ee-backend.db-schema.json"));
                 }
-                other => panic!("expected generate-schema-config command, got {other:?}"),
+                other => panic!("expected generate-db-schema-config command, got {other:?}"),
             }
         }
 

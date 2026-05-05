@@ -25,30 +25,34 @@ For generated client schema files, use the CLI export command:
 
 ```bash
 e2ee-backend-adapter-cli export-expected-schema \
-  --schema-config ./e2ee-backend.schema-config.json \
+  --db-schema-config ./e2ee-backend.db-schema.json \
+  --encrypted-schema-config ./e2ee-backend.encrypted-schema.json \
   --api graphql \
   --out ./generated/expected-schema.json \
   --typescript-out ./generated/e2ee-client-bindings.ts
 ```
 
-The schema config is now the backend-owned source of truth for generated client
-bindings. It includes the full logical entity structure, both encrypted and
-non-encrypted fields. Use `--api graphql` or `--api rest` to choose the client
-binding surface to export.
+The DB schema config is the structural source of truth for export generation.
+It is intended to be generated from the database and contains entity names,
+table mappings, inferred field shapes, and encrypted field placeholders. The
+encrypted schema config is the user-authored overlay for encrypted field
+structure and API naming overrides. Use `--api graphql` or `--api rest` to
+choose the client binding surface to export.
 
-If you want a starter schema config from a live Postgres database, scaffold one
-first and then refine it manually:
+If you want a DB schema config from a live Postgres database, generate it with
+the CLI:
 
 ```bash
-e2ee-backend-adapter-cli generate-schema-config \
+e2ee-backend-adapter-cli generate-db-schema-config \
   --database-url postgres://postgres:postgres@localhost:5432/app \
   --name my-backend \
-  --out ./e2ee-backend.schema-config.json
+  --out ./e2ee-backend.db-schema.json
 ```
 
-The scaffold command is intentionally a starting point. It can infer tables,
-columns, primary keys, and encrypted ciphertext/nonce pairs, but it cannot know
-the final logical client shape you want for decrypted objects.
+The DB scaffold can infer tables, columns, primary keys, and encrypted
+ciphertext/nonce pairs, but it cannot know the final logical client shape you
+want for decrypted objects. That richer structure belongs in
+`e2ee-backend.encrypted-schema.json`.
 
 For database reconciliation workflows, use `diff`, which now writes SQL by
 default:

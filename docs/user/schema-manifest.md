@@ -21,13 +21,14 @@ what is safe to edit manually, see [File Lifecycle](file-lifecycle.md).
 The adapter can also export a separate generated schema file for client-side
 consumption, but it does not read that generated file back at runtime.
 
-`export-expected-schema` writes a JSON representation of the backend schema
-config's expected client-facing shape. It is not SQL DDL and it is not a
+`export-expected-schema` writes a JSON representation of the combined DB schema
+config plus encrypted schema overlay. It is not SQL DDL and it is not a
 migration file.
 
-The schema config is the user-authored source of truth for export generation.
-It carries the full logical entity structure, including encrypted and
-non-encrypted fields. Auth is still implicit and fixed by the adapter.
+The DB schema config is the structural source of truth for export generation.
+The encrypted schema config is a second, user-authored file that adds decrypted
+encrypted-field structure and API naming overrides. Auth is still implicit and
+fixed by the adapter.
 
 If you also pass `--typescript-out`, the adapter writes a generated TypeScript
 companion module alongside the JSON export. For now, TypeScript is the only
@@ -37,20 +38,22 @@ Example export workflow:
 
 ```bash
 e2ee-backend-adapter-cli export-expected-schema \
-	--schema-config ./e2ee-backend.schema-config.json \
+	--db-schema-config ./e2ee-backend.db-schema.json \
+	--encrypted-schema-config ./e2ee-backend.encrypted-schema.json \
 	--api graphql \
 	--out ./generated/expected-schema.json \
 	--typescript-out ./generated/e2ee-client-bindings.ts
 ```
 
-## Backend Schema Config File
+## DB Schema Config File
 
-The backend schema config file is a user-authored JSON file consumed during
-schema export. The runtime server does not read it when serving requests, and
-database diffing still works from the manifest/runtime contract.
+The DB schema config file is a generated JSON file consumed during schema
+export. The runtime server does not read it when serving requests, and database
+diffing still works from the manifest/runtime contract.
 
-Use it to define the full logical client-facing structure that the database
-alone cannot infer on its own.
+Use it to carry the database-derived structural model: entity names, table
+metadata, inferred non-encrypted field schemas, and encrypted field
+placeholders.
 
 The common case is an encrypted field like `config` that is stored in the
 database as ciphertext and nonce columns, but should appear in generated client
@@ -78,7 +81,10 @@ The top-level shape is:
 				{
 					"encrypted": true,
 					"entityPath": "config",
-					"entitySchema": { "ref": "PlanderaConfig", "nullable": true },
+					"entitySchema": {
+						"nullable": true,
+						"schema": { "type": "unknown" }
+					},
 					"remotePath": "configEnvelope"
 				},
 				{
@@ -87,6 +93,36 @@ The top-level shape is:
 					"entitySchema": { "schema": { "type": "string" } }
 				}
 			]
+		}
+	]
+}
+```
+
+## Encrypted Schema Config File
+
+The encrypted schema config is the user-authored overlay. It defines the rich
+logical structure of encrypted fields and any API naming overrides that the DB
+cannot infer.
+
+```json
+{
+	"entityApiOverrides": [
+		{
+			"tableName": "integrations",
+			"graphql": {
+				"createMutation": "createIntegrationRecord",
+				"deleteMutation": "deleteIntegration",
+				"getByIdQuery": "integrationRecord",
+				"listQuery": "integrationRecords",
+				"updateMutation": "updateIntegrationRecord"
+			}
+		}
+	],
+	"encryptedFields": [
+		{
+			"tableName": "integrations",
+			"entityPath": "config",
+			"entitySchema": { "ref": "PlanderaConfig", "nullable": true }
 		}
 	],
 	"types": {
@@ -110,39 +146,46 @@ The top-level shape is:
 
 ### Top-Level Keys
 
-- `name`: backend/schema name used in generated outputs
-- `entities`: exported entities, their DB mapping, and logical field structure
+- `name`: backend/schema name used in generated outputs, in the DB schema file
+- `entities`: exported entities and their DB mapping, in the DB schema file
+- `entityApiOverrides`: optional per-entity GraphQL or REST naming overrides, in
+	the encrypted schema file
+- `encryptedFields`: encrypted field logical type overrides, in the encrypted
+	schema file
 - `types`: named reusable schema nodes that other entries can reference with
   `{"ref": "TypeName"}`
 
 ### Entity Field Entries
 
-Each entity field entry supports:
+Each encrypted field entry supports:
 
-- `encrypted`: whether the field is transported as an encrypted envelope
+- `entityName`: optional exported entity name matcher
+- `tableName`: optional table-name matcher
 - `entityPath`: logical client-side field path, such as `config`
-- `entitySchema`: schema node for the entity-side value
+- `entitySchema`: schema node for the decrypted entity-side value
 - `remotePath`: optional remote/API field name override, such as `configEnvelope`
 - `remoteSchema`: optional remote-side schema override when the API shape differs
 - `strategyId`: optional encryption strategy override
 
-The schema config can also include optional per-entity `graphql` or `rest`
-override blocks when the backend API names do not follow adapter conventions.
+The encrypted schema config can also include optional per-entity `graphql` or
+`rest` override blocks when the backend API names do not follow adapter
+conventions.
 
 ### Scaffolding From The Database
 
-You can scaffold a starting schema config from Postgres metadata:
+You can scaffold the DB schema config from Postgres metadata:
 
 ```bash
-e2ee-backend-adapter-cli generate-schema-config \
+e2ee-backend-adapter-cli generate-db-schema-config \
 	--database-url postgres://postgres:postgres@localhost:5432/app \
 	--name my-backend \
-	--out ./e2ee-backend.schema-config.json
+	--out ./e2ee-backend.db-schema.json
 ```
 
 This scaffolds tables, columns, primary keys, basic scalar types, and encrypted
-`*_ciphertext`/`*_nonce` pairs. It does not replace manual modeling of the
-final decrypted object structure.
+`*_ciphertext`/`*_nonce` pairs into the DB schema file. It does not replace
+manual modeling of the final decrypted object structure in the encrypted schema
+file.
 
 ### Schema Nodes
 

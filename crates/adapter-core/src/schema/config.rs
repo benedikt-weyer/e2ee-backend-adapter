@@ -22,24 +22,18 @@ pub enum ExportApiKind {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackendSchemaConfig {
-    pub entities: Vec<BackendSchemaEntityConfig>,
+pub struct BackendDbSchemaConfig {
+    pub entities: Vec<BackendDbSchemaEntityConfig>,
     pub name: String,
-    #[serde(default)]
-    pub types: BTreeMap<String, SchemaConfigNode>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackendSchemaEntityConfig {
-    pub database: BackendSchemaEntityDatabaseConfig,
-    pub fields: Vec<BackendSchemaFieldConfig>,
-    #[serde(default)]
-    pub graphql: Option<BackendSchemaEntityGraphqlConfig>,
+pub struct BackendDbSchemaEntityConfig {
+    pub database: BackendDbSchemaEntityDatabaseConfig,
+    pub fields: Vec<BackendDbSchemaFieldConfig>,
     pub id_path: String,
     pub name: String,
-    #[serde(default)]
-    pub rest: Option<BackendSchemaEntityRestConfig>,
     pub table_name: String,
 }
 
@@ -67,14 +61,14 @@ pub struct BackendSchemaEntityRestConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackendSchemaEntityDatabaseConfig {
-    pub columns: Vec<BackendSchemaColumnConfig>,
+pub struct BackendDbSchemaEntityDatabaseConfig {
+    pub columns: Vec<BackendDbSchemaColumnConfig>,
     pub primary_key: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackendSchemaColumnConfig {
+pub struct BackendDbSchemaColumnConfig {
     pub column_name: String,
     pub nullable: bool,
     pub sql_type: String,
@@ -82,36 +76,51 @@ pub struct BackendSchemaColumnConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BackendSchemaFieldConfig {
+pub struct BackendDbSchemaFieldConfig {
     pub encrypted: bool,
     pub entity_path: String,
     pub entity_schema: SchemaConfigNode,
     #[serde(default)]
     pub remote_path: Option<String>,
-    #[serde(default)]
-    pub remote_schema: Option<SchemaConfigNode>,
-    #[serde(default)]
-    pub strategy_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GeneratedSchemaConfig {
+pub struct EncryptedSchemaConfig {
     #[serde(default)]
-    pub encrypted_fields: Vec<EncryptedFieldTypeMapping>,
+    pub entity_api_overrides: Vec<EntityApiOverrideConfig>,
+    #[serde(default)]
+    pub encrypted_fields: Vec<EncryptedFieldConfig>,
     #[serde(default)]
     pub types: BTreeMap<String, SchemaConfigNode>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EncryptedFieldTypeMapping {
+pub struct EntityApiOverrideConfig {
+    #[serde(default)]
+    pub entity_name: Option<String>,
+    #[serde(default)]
+    pub graphql: Option<BackendSchemaEntityGraphqlConfig>,
+    #[serde(default)]
+    pub rest: Option<BackendSchemaEntityRestConfig>,
+    #[serde(default)]
+    pub table_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EncryptedFieldConfig {
     pub entity_path: String,
     pub entity_schema: SchemaConfigNode,
     #[serde(default)]
     pub entity_name: Option<String>,
     #[serde(default)]
+    pub remote_path: Option<String>,
+    #[serde(default)]
     pub remote_schema: Option<SchemaConfigNode>,
+    #[serde(default)]
+    pub strategy_id: Option<String>,
     #[serde(default)]
     pub table_name: Option<String>,
 }
@@ -191,8 +200,8 @@ struct ScaffoldPrimaryKeyRow {
     column_name: String,
 }
 
-pub fn manifest_from_schema_config(
-    config: &BackendSchemaConfig,
+pub fn manifest_from_db_schema_config(
+    config: &BackendDbSchemaConfig,
     api: ExportApiKind,
 ) -> Result<BackendAdapterManifest> {
     if config.name.trim().is_empty() {
@@ -205,7 +214,7 @@ pub fn manifest_from_schema_config(
     let entity_manifests = config
         .entities
         .iter()
-        .map(|entity| build_entity_manifest(entity, &config.types))
+        .map(build_entity_manifest)
         .collect::<Result<Vec<_>>>()?;
 
     let expected_entities = config
@@ -240,10 +249,10 @@ pub fn manifest_from_schema_config(
         .zip(entity_manifests.iter())
         .map(|(entity, fields)| EntityManifest {
             fields: fields.clone(),
-            graphql: derived_graphql_manifest(entity),
+            graphql: derived_graphql_manifest(&entity.name, &entity.table_name, None),
             id_path: entity.id_path.clone(),
             name: entity.name.clone(),
-            rest: derived_rest_manifest(entity),
+            rest: derived_rest_manifest(&entity.name, None),
             table_name: entity.table_name.clone(),
         })
         .collect::<Vec<_>>();
@@ -292,7 +301,7 @@ pub fn manifest_from_schema_config(
     Ok(manifest)
 }
 
-pub async fn scaffold_schema_config_from_database(
+pub async fn scaffold_db_schema_config_from_database(
     database_url: &str,
     name: &str,
 ) -> Result<String> {
@@ -330,10 +339,9 @@ pub async fn scaffold_schema_config_from_database(
         entities.push(scaffold_entity_config(&table.table_name, &primary_key, &columns));
     }
 
-    let config = BackendSchemaConfig {
+    let config = BackendDbSchemaConfig {
         entities,
         name: name.to_owned(),
-        types: BTreeMap::new(),
     };
 
     Ok(format!("{}\n", serde_json::to_string_pretty(&config)?))
@@ -378,7 +386,7 @@ fn scaffold_entity_config(
     table_name: &str,
     primary_key: &str,
     columns: &[ScaffoldColumnRow],
-) -> BackendSchemaEntityConfig {
+) -> BackendDbSchemaEntityConfig {
     let mut fields = Vec::new();
     let mut consumed = std::collections::BTreeSet::new();
 
@@ -392,7 +400,7 @@ fn scaffold_entity_config(
             if columns.iter().any(|candidate| candidate.column_name == nonce_column) {
                 consumed.insert(column.column_name.clone());
                 consumed.insert(nonce_column);
-                fields.push(BackendSchemaFieldConfig {
+                fields.push(BackendDbSchemaFieldConfig {
                     encrypted: true,
                     entity_path: camel_case(prefix),
                     entity_schema: SchemaConfigNode {
@@ -402,15 +410,13 @@ fn scaffold_entity_config(
                         schema: Some(SchemaConfigDescriptor::Unknown),
                     },
                     remote_path: Some(format!("{}Envelope", camel_case(prefix))),
-                    remote_schema: None,
-                    strategy_id: None,
                 });
                 continue;
             }
         }
 
         consumed.insert(column.column_name.clone());
-        fields.push(BackendSchemaFieldConfig {
+        fields.push(BackendDbSchemaFieldConfig {
             encrypted: false,
             entity_path: camel_case(&column.column_name),
             entity_schema: SchemaConfigNode {
@@ -420,16 +426,14 @@ fn scaffold_entity_config(
                 schema: Some(schema_descriptor_for_column(column)),
             },
             remote_path: None,
-            remote_schema: None,
-            strategy_id: None,
         });
     }
 
-    BackendSchemaEntityConfig {
-        database: BackendSchemaEntityDatabaseConfig {
+    BackendDbSchemaEntityConfig {
+        database: BackendDbSchemaEntityDatabaseConfig {
             columns: columns
                 .iter()
-                .map(|column| BackendSchemaColumnConfig {
+                .map(|column| BackendDbSchemaColumnConfig {
                     column_name: column.column_name.clone(),
                     nullable: is_nullable(column),
                     sql_type: column.udt_name.to_ascii_uppercase(),
@@ -438,10 +442,8 @@ fn scaffold_entity_config(
             primary_key: primary_key.to_owned(),
         },
         fields,
-        graphql: None,
         id_path: camel_case(primary_key),
         name: singularize(table_name),
-        rest: None,
         table_name: table_name.to_owned(),
     }
 }
@@ -482,8 +484,7 @@ fn singularize(table_name: &str) -> String {
 }
 
 fn build_entity_manifest(
-    entity: &BackendSchemaEntityConfig,
-    types: &BTreeMap<String, SchemaConfigNode>,
+    entity: &BackendDbSchemaEntityConfig,
 ) -> Result<Vec<EntityFieldManifest>> {
     if entity.name.trim().is_empty() {
         bail!("Schema config entity name must not be empty.");
@@ -498,18 +499,16 @@ fn build_entity_manifest(
     entity
         .fields
         .iter()
-        .map(|field| build_field_manifest(field, types))
+        .map(build_field_manifest)
         .collect::<Result<Vec<_>>>()
 }
 
 fn build_field_manifest(
-    field: &BackendSchemaFieldConfig,
-    types: &BTreeMap<String, SchemaConfigNode>,
+    field: &BackendDbSchemaFieldConfig,
 ) -> Result<EntityFieldManifest> {
     let mut resolution_path = Vec::new();
-    let entity_schema = resolve_schema_node(&field.entity_schema, types, &mut resolution_path)?;
-    let remote_source = field.remote_schema.as_ref().unwrap_or(&field.entity_schema);
-    let remote_schema = resolve_schema_node(remote_source, types, &mut resolution_path)?;
+    let entity_schema = resolve_schema_node(&field.entity_schema, &BTreeMap::new(), &mut resolution_path)?;
+    let remote_schema = resolve_schema_node(&field.entity_schema, &BTreeMap::new(), &mut resolution_path)?;
 
     Ok(EntityFieldManifest {
         encrypted: field.encrypted,
@@ -524,25 +523,25 @@ fn build_field_manifest(
             .unwrap_or_else(|| field.entity_path.clone()),
         remote_schema: Some(remote_schema.clone()),
         remote_type: infer_schema_type(&remote_schema.schema).to_owned(),
-        strategy_id: field.strategy_id.clone(),
+        strategy_id: None,
     })
 }
 
 fn build_expected_schema_entity(
-    entity: &BackendSchemaEntityConfig,
+    entity: &BackendDbSchemaEntityConfig,
     fields: Vec<EntityFieldManifest>,
     api: ExportApiKind,
 ) -> ExpectedSchemaEntityManifest {
     ExpectedSchemaEntityManifest {
         api: match api {
             ExportApiKind::Graphql => ExpectedSchemaEntityApiManifest {
-                graphql: Some(derived_graphql_manifest(entity)),
+                graphql: Some(derived_graphql_manifest(&entity.name, &entity.table_name, None)),
                 rest: None,
                 api_type: "graphql".to_owned(),
             },
             ExportApiKind::Rest => ExpectedSchemaEntityApiManifest {
                 graphql: None,
-                rest: Some(derived_rest_manifest(entity)),
+                rest: Some(derived_rest_manifest(&entity.name, None)),
                 api_type: "rest".to_owned(),
             },
         },
@@ -552,6 +551,166 @@ fn build_expected_schema_entity(
         primary_key: entity.database.primary_key.clone(),
         table_name: entity.table_name.clone(),
     }
+}
+
+fn update_entity_api_overrides(
+    manifest: &mut BackendAdapterManifest,
+    override_config: &EntityApiOverrideConfig,
+    api: ExportApiKind,
+) -> Result<()> {
+    if override_config.entity_name.is_none() && override_config.table_name.is_none() {
+        bail!("Entity API override must define entityName, tableName, or both.");
+    }
+
+    let entity_index = manifest
+        .database
+        .expected_schema
+        .entities
+        .iter()
+        .position(|entity| {
+            override_config
+                .entity_name
+                .as_ref()
+                .is_none_or(|name| entity.name == *name)
+                && override_config
+                    .table_name
+                    .as_ref()
+                    .is_none_or(|table_name| entity.table_name == *table_name)
+        })
+        .ok_or_else(|| anyhow!("Entity API override did not match an exported entity."))?;
+
+    let expected_entity = &mut manifest.database.expected_schema.entities[entity_index];
+    let runtime_entity = manifest
+        .entities
+        .get_mut(entity_index)
+        .ok_or_else(|| anyhow!("Entity API override matched an invalid manifest entity index."))?;
+
+    if let Some(graphql) = override_config.graphql.as_ref() {
+        runtime_entity.graphql = derived_graphql_manifest(
+            &runtime_entity.name,
+            &runtime_entity.table_name,
+            Some(graphql),
+        );
+
+        if api == ExportApiKind::Graphql {
+            expected_entity.api.graphql = Some(derived_graphql_manifest(
+                &expected_entity.name,
+                &expected_entity.table_name,
+                Some(graphql),
+            ));
+        }
+    }
+
+    if let Some(rest) = override_config.rest.as_ref() {
+        runtime_entity.rest = derived_rest_manifest(&runtime_entity.name, Some(rest));
+
+        if api == ExportApiKind::Rest {
+            expected_entity.api.rest = Some(derived_rest_manifest(&expected_entity.name, Some(rest)));
+        }
+    }
+
+    Ok(())
+}
+
+fn update_encrypted_field_overrides(
+    manifest: &mut BackendAdapterManifest,
+    mapping: &EncryptedFieldConfig,
+    types: &BTreeMap<String, SchemaConfigNode>,
+) -> Result<()> {
+    if mapping.entity_name.is_none() && mapping.table_name.is_none() {
+        bail!(
+            "Encrypted field config for '{}' must define entityName, tableName, or both.",
+            mapping.entity_path
+        );
+    }
+
+    let entity_index = manifest
+        .database
+        .expected_schema
+        .entities
+        .iter()
+        .position(|entity| {
+            mapping
+                .entity_name
+                .as_ref()
+                .is_none_or(|name| entity.name == *name)
+                && mapping
+                    .table_name
+                    .as_ref()
+                    .is_none_or(|table_name| entity.table_name == *table_name)
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "Encrypted field config for '{}' did not match an exported entity.",
+                mapping.entity_path
+            )
+        })?;
+
+    let expected_entity = &mut manifest.database.expected_schema.entities[entity_index];
+    let runtime_entity = manifest
+        .entities
+        .get_mut(entity_index)
+        .ok_or_else(|| anyhow!("Encrypted field config matched an invalid manifest entity index."))?;
+
+    let expected_field_index = expected_entity
+        .fields
+        .iter()
+        .position(|field| field.entity_path == mapping.entity_path)
+        .ok_or_else(|| {
+            anyhow!(
+                "Encrypted field config for '{}' did not match a field on entity '{}'.",
+                mapping.entity_path,
+                expected_entity.name
+            )
+        })?;
+    let runtime_field_index = runtime_entity
+        .fields
+        .iter()
+        .position(|field| field.entity_path == mapping.entity_path)
+        .ok_or_else(|| {
+            anyhow!(
+                "Encrypted field config for '{}' did not match a runtime field on entity '{}'.",
+                mapping.entity_path,
+                runtime_entity.name
+            )
+        })?;
+
+    let expected_field = &mut expected_entity.fields[expected_field_index];
+    let runtime_field = &mut runtime_entity.fields[runtime_field_index];
+
+    if !expected_field.encrypted || !runtime_field.encrypted {
+        bail!(
+            "Encrypted field config for '{}.{}' targets a field that is not marked encrypted.",
+            expected_entity.name,
+            mapping.entity_path
+        );
+    }
+
+    let mut resolution_path = Vec::new();
+    let entity_schema = resolve_schema_node(&mapping.entity_schema, types, &mut resolution_path)?;
+    let remote_schema = mapping
+        .remote_schema
+        .as_ref()
+        .map(|schema| resolve_schema_node(schema, types, &mut resolution_path))
+        .transpose()?;
+
+    for field in [expected_field, runtime_field] {
+        field.entity_type = infer_schema_type(&entity_schema.schema).to_owned();
+        field.entity_schema = Some(entity_schema.clone());
+
+        if let Some(remote_path) = mapping.remote_path.as_ref() {
+            field.remote_path = remote_path.clone();
+        }
+        if let Some(remote_schema) = remote_schema.as_ref() {
+            field.remote_type = infer_schema_type(&remote_schema.schema).to_owned();
+            field.remote_schema = Some(remote_schema.clone());
+        }
+        if let Some(strategy_id) = mapping.strategy_id.as_ref() {
+            field.strategy_id = Some(strategy_id.clone());
+        }
+    }
+
+    Ok(())
 }
 
 fn default_auth_manifest() -> AuthManifest {
@@ -578,26 +737,30 @@ fn default_auth_manifest() -> AuthManifest {
     }
 }
 
-fn derived_rest_manifest(entity: &BackendSchemaEntityConfig) -> EntityRestManifest {
+fn derived_rest_manifest(
+    entity_name: &str,
+    override_config: Option<&BackendSchemaEntityRestConfig>,
+) -> EntityRestManifest {
     EntityRestManifest {
         allow_create: true,
         allow_delete: true,
         allow_get_by_id: true,
         allow_list: true,
         allow_update: true,
-        base_path: entity
-            .rest
-            .as_ref()
+        base_path: override_config
             .and_then(|rest| rest.base_path.clone())
-            .unwrap_or_else(|| format!("/entities/{}", kebab_case(&entity.name))),
+            .unwrap_or_else(|| format!("/entities/{}", kebab_case(entity_name))),
     }
 }
 
-fn derived_graphql_manifest(entity: &BackendSchemaEntityConfig) -> EntityGraphqlManifest {
-    let overrides = entity.graphql.as_ref();
-    let pascal_name = pascal_case(&entity.name);
-    let camel_name = camel_case(&entity.name);
-    let list_name = camel_case(&entity.table_name);
+fn derived_graphql_manifest(
+    entity_name: &str,
+    table_name: &str,
+    overrides: Option<&BackendSchemaEntityGraphqlConfig>,
+) -> EntityGraphqlManifest {
+    let pascal_name = pascal_case(entity_name);
+    let camel_name = camel_case(entity_name);
+    let list_name = camel_case(table_name);
 
     EntityGraphqlManifest {
         allow_create: true,
@@ -677,70 +840,17 @@ fn kebab_case(value: &str) -> String {
         .to_owned()
 }
 
-pub fn apply_generated_schema_config(
+pub fn apply_encrypted_schema_config(
     manifest: &mut BackendAdapterManifest,
-    config: &GeneratedSchemaConfig,
+    config: &EncryptedSchemaConfig,
+    api: ExportApiKind,
 ) -> Result<()> {
+    for override_config in &config.entity_api_overrides {
+        update_entity_api_overrides(manifest, override_config, api)?;
+    }
+
     for mapping in &config.encrypted_fields {
-        if mapping.entity_name.is_none() && mapping.table_name.is_none() {
-            bail!(
-                "Encrypted field type mapping for '{}' must define entityName, tableName, or both.",
-                mapping.entity_path
-            );
-        }
-
-        let entity = manifest
-            .database
-            .expected_schema
-            .entities
-            .iter_mut()
-            .find(|entity| {
-                mapping
-                    .entity_name
-                    .as_ref()
-                    .is_none_or(|name| entity.name == *name)
-                    && mapping
-                        .table_name
-                        .as_ref()
-                        .is_none_or(|table_name| entity.table_name == *table_name)
-            })
-            .ok_or_else(|| {
-                anyhow!(
-                    "Encrypted field type mapping for '{}' did not match an exported entity.",
-                    mapping.entity_path
-                )
-            })?;
-
-        let field = entity
-            .fields
-            .iter_mut()
-            .find(|field| field.entity_path == mapping.entity_path)
-            .ok_or_else(|| {
-                anyhow!(
-                    "Encrypted field type mapping for '{}' did not match a field on entity '{}'.",
-                    mapping.entity_path,
-                    entity.name
-                )
-            })?;
-
-        if !field.encrypted {
-            bail!(
-                "Encrypted field type mapping for '{}.{}' targets a field that is not marked encrypted.",
-                entity.name,
-                mapping.entity_path
-            );
-        }
-
-        let mut resolution_path = Vec::new();
-        let entity_schema = resolve_schema_node(&mapping.entity_schema, &config.types, &mut resolution_path)?;
-        field.entity_type = infer_schema_type(&entity_schema.schema).to_owned();
-        field.entity_schema = Some(entity_schema);
-
-        if let Some(remote_schema) = &mapping.remote_schema {
-            let remote_schema = resolve_schema_node(remote_schema, &config.types, &mut resolution_path)?;
-            field.remote_type = infer_schema_type(&remote_schema.schema).to_owned();
-            field.remote_schema = Some(remote_schema);
-        }
+        update_encrypted_field_overrides(manifest, mapping, &config.types)?;
     }
 
     Ok(())
@@ -889,7 +999,7 @@ fn infer_schema_type(schema: &SchemaDescriptorManifest) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_generated_schema_config, GeneratedSchemaConfig};
+    use super::{apply_encrypted_schema_config, EncryptedSchemaConfig, ExportApiKind};
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
         EntityGraphqlManifest, EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest,
@@ -976,7 +1086,18 @@ mod tests {
                 },
             },
             entities: vec![EntityManifest {
-                fields: vec![],
+                fields: vec![EntityFieldManifest {
+                    encrypted: true,
+                    entity_schema: None,
+                    entity_path: "config".to_owned(),
+                    entity_type: "object".to_owned(),
+                    nullable: true,
+                    optional: false,
+                    remote_path: "configEnvelope".to_owned(),
+                    remote_schema: None,
+                    remote_type: "object".to_owned(),
+                    strategy_id: None,
+                }],
                 graphql: EntityGraphqlManifest {
                     allow_create: true,
                     allow_delete: true,
@@ -1010,7 +1131,7 @@ mod tests {
     #[test]
     fn applies_named_object_types_to_encrypted_fields() {
         let mut manifest = manifest();
-        let config: GeneratedSchemaConfig = serde_json::from_str(
+                let config: EncryptedSchemaConfig = serde_json::from_str(
             r#"{
               "types": {
                 "PlanderaConfig": {
@@ -1036,7 +1157,8 @@ mod tests {
         )
         .expect("config should parse");
 
-        apply_generated_schema_config(&mut manifest, &config).expect("config should apply");
+        apply_encrypted_schema_config(&mut manifest, &config, ExportApiKind::Rest)
+            .expect("config should apply");
 
         let field = &manifest.database.expected_schema.entities[0].fields[0];
         assert_eq!(field.entity_type, "object");
@@ -1045,4 +1167,40 @@ mod tests {
             Some(SchemaDescriptorManifest::Object { .. })
         ));
     }
+
+        #[test]
+        fn applies_entity_api_overrides_from_encrypted_config() {
+                let mut manifest = manifest();
+                let config: EncryptedSchemaConfig = serde_json::from_str(
+                        r#"{
+                            "entityApiOverrides": [
+                                {
+                                    "tableName": "integrations",
+                                    "graphql": {
+                                        "createMutation": "createIntegrationRecord",
+                                        "deleteMutation": "deleteIntegrationRecord",
+                                        "getByIdQuery": "integrationRecord",
+                                        "listQuery": "integrationRecords",
+                                        "updateMutation": "updateIntegrationRecord"
+                                    }
+                                }
+                            ]
+                        }"#,
+                )
+                .expect("config should parse");
+
+                apply_encrypted_schema_config(&mut manifest, &config, ExportApiKind::Graphql)
+                        .expect("config should apply");
+
+                assert_eq!(
+                        manifest.database.expected_schema.entities[0]
+                                .api
+                                .graphql
+                                .as_ref()
+                                .expect("graphql config should exist")
+                                .create_mutation,
+                        "createIntegrationRecord"
+                );
+                assert_eq!(manifest.entities[0].graphql.list_query, "integrationRecords");
+        }
 }

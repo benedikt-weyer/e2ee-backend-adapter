@@ -26,7 +26,8 @@ generated/
   schema-diff.sql
 scripts/
   generate-e2ee-bindings.mjs
-e2ee-backend.schema-config.json
+e2ee-backend.db-schema.json
+e2ee-backend.encrypted-schema.json
 generated/e2ee-backend.manifest.json
 ```
 
@@ -37,8 +38,9 @@ and which files are generated artifacts.
 
 | File | Usually created by | Consumed by | Manual edits allowed? | Notes |
 | --- | --- | --- | --- | --- |
-| `scripts/generate-e2ee-bindings.mjs` or equivalent source file | You | Your own build or generation workflow | Yes | This is still a real source file, but it should just invoke `e2ee-backend-adapter-cli` with your backend-owned schema config instead of constructing a manifest in frontend code. |
-| `e2ee-backend.schema-config.json` | You | `e2ee-backend-adapter-cli export-expected-schema --schema-config ...` | Yes | Primary backend-owned source for generated bindings. It defines full logical structure, encrypted and non-encrypted fields, plus optional API naming overrides. |
+| `scripts/generate-e2ee-bindings.mjs` or equivalent source file | You | Your own build or generation workflow | Yes | This is still a real source file, but it should just invoke `e2ee-backend-adapter-cli` with the DB schema file plus the encrypted schema overlay. |
+| `e2ee-backend.db-schema.json` | CLI + database | `e2ee-backend-adapter-cli export-expected-schema --db-schema-config ...` | Usually no | Structural generated file containing table metadata, inferred field shapes, and encrypted field placeholders. |
+| `e2ee-backend.encrypted-schema.json` | You | `e2ee-backend-adapter-cli export-expected-schema --encrypted-schema-config ...` | Yes | User-authored overlay for encrypted field structure and API naming overrides. |
 | `generated/e2ee-backend.manifest.json` | Your generator script, using `e2ee-client-backend` | `e2ee-backend-adapter-server`, `e2ee-backend-adapter-cli validate-manifest`, `e2ee-backend-adapter-cli diff`, `e2ee-backend-adapter-cli export-expected-schema` | No | Generated artifact. If something is wrong, change the source generator code, not this file. |
 | `generated/expected-schema.json` | `e2ee-backend-adapter-cli export-expected-schema` | Client apps that consume generated schema JSON directly | No | Generated artifact. It is client-facing schema metadata, not runtime server input. |
 | `generated/e2ee-client-bindings.ts` | `e2ee-backend-adapter-cli export-expected-schema --typescript-out ...` | TypeScript apps using generated typed helpers | No | Generated artifact. Import this in your frontend or client package instead of rewriting types and transport wiring manually. |
@@ -49,14 +51,25 @@ and which files are generated artifacts.
 
 These are the files you should treat as primary source files.
 
-### Backend Schema Config File
+### DB Schema Config File
 
-This is the file passed through `--schema-config`.
+This is the file passed through `--db-schema-config`.
 
 Typical responsibilities:
 
 - define backend/entity names and DB mappings
-- define the full logical client-facing field structure
+- define inferred non-encrypted field schemas from DB metadata
+- mark encrypted field placeholders and transport paths
+
+This file is generated from the database and should usually not be edited by
+hand.
+
+### Encrypted Schema Config File
+
+This is the file passed through `--encrypted-schema-config`.
+
+Typical responsibilities:
+
 - define reusable named schema fragments in `types`
 - map encrypted fields to logical decrypted object structures
 - add API naming overrides when your backend does not follow adapter defaults
@@ -66,8 +79,7 @@ This file is also owned by you and should be edited directly.
 Use it when a field like `config` should generate as a structured object type
 instead of a fallback like `Record<string, unknown>`.
 
-If you want a starting point, you can scaffold this file from Postgres with
-`generate-schema-config` and then refine it manually.
+The DB file can be scaffolded from Postgres with `generate-db-schema-config`.
 
 ## Generated Files
 
@@ -165,9 +177,9 @@ If the runtime server behavior is wrong:
 - edit the manifest generator source file
 - then regenerate `e2ee-backend.manifest.json`
 
-If generated client types or binding operation names are wrong:
+If generated client types for encrypted fields or binding operation names are wrong:
 
-- edit `e2ee-backend.schema-config.json`
+- edit `e2ee-backend.encrypted-schema.json`
 - then rerun `export-expected-schema`
 
 If a generated SQL or migration file needs cleanup before applying:
@@ -178,8 +190,10 @@ If a generated SQL or migration file needs cleanup before applying:
 
 ## Source Of Truth Rules
 
-- Treat the backend schema config file as the source of truth for generated API,
-  entity, table, and richer decrypted object metadata.
+- Treat the DB schema config file as the source of truth for generated table,
+  entity, and inferred field metadata.
+- Treat the encrypted schema config file as the source of truth for richer
+  decrypted object metadata and API naming overrides.
 - Treat generated manifest and generated client binding files as disposable
   build artifacts unless your repository intentionally commits them.
 - Treat generated diff output as a reviewed starting point, not an untouchable
