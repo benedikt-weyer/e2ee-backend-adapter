@@ -17,6 +17,10 @@ e2ee-backend-adapter-server \
 
 The current scaffold validates the manifest, connects to PostgreSQL, creates the auth tables it needs if they are missing, and exposes generated route placeholders plus adapter metadata endpoints.
 
+Before wiring this into a larger project, read [File Lifecycle](file-lifecycle.md).
+That page explains which files you author, which files are generated, who
+consumes each one, and which ones should not be edited by hand.
+
 For generated client schema files, use the CLI export command:
 
 ```bash

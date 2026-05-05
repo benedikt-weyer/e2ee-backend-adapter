@@ -22,6 +22,7 @@ nav:
   - Overview: index.md
   - User Guide:
       - Getting Started: user/getting-started.md
+      - File Lifecycle: user/file-lifecycle.md
       - Schema Manifest: user/schema-manifest.md
       - Database Diff And Migrations: user/database-tooling.md
   - Developer Guide:
