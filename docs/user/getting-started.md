@@ -15,7 +15,7 @@ e2ee-backend-adapter-server \
   --database-url postgres://postgres:postgres@localhost:5432/app
 ```
 
-The current runtime validates the manifest, connects to PostgreSQL, creates the auth tables it needs if they are missing, and exposes adapter metadata endpoints. When the exported expected schema uses `--api graphql`, the runtime also exposes the configured GraphQL endpoint with database-backed entity CRUD plus the GraphQL auth operations. The REST entity surface remains scaffolded until a REST CRUD layer is added.
+The current runtime validates the manifest, connects to PostgreSQL, creates the auth tables it needs if they are missing, and exposes adapter metadata endpoints. When the exported expected schema uses `--api graphql`, the runtime exposes the configured GraphQL endpoint with database-backed entity CRUD plus the GraphQL auth operations. When the exported expected schema uses `--api rest`, the generated REST entity routes are also backed by the same database CRUD layer.
 
 Before wiring this into a larger project, read [File Lifecycle](file-lifecycle.md).
 That page explains which files you author, which files are generated, who

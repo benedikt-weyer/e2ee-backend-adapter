@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::HeaderMap,
     http::StatusCode,
     response::IntoResponse,
@@ -7,6 +7,7 @@ use axum::{
     Json, Router,
 };
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 use crate::{
     auth::{
@@ -24,7 +25,7 @@ use crate::{
         EmailQuery,
         KdfSaltResponse,
     },
-    db::DatabaseBackend,
+    db::{entity_store, DatabaseBackend},
     manifest::{BackendAdapterManifest, EntityManifest},
     AdapterRuntimeState,
 };
@@ -37,18 +38,16 @@ struct HealthResponse {
 }
 
 #[derive(Clone, Serialize)]
-struct PlaceholderResponse {
-    entity: Option<String>,
-    message: &'static str,
-    operation: String,
-}
-
-#[derive(Clone, Serialize)]
 struct RuntimeSummary {
     auth: AuthRouteSummary,
     entity_count: usize,
     manifest_name: String,
     realtime_path: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct ErrorResponse {
+    message: String,
 }
 
 pub fn build_router(state: AdapterRuntimeState) -> Router {
@@ -82,22 +81,22 @@ fn entity_router(entity: EntityManifest) -> Router<AdapterRuntimeState> {
     let mut router = Router::new();
 
     if entity.rest.allow_list {
-        router = router.route("/", get(list_placeholder));
+        router = router.route("/", get(list_entity_handler));
     }
     if entity.rest.allow_create {
-        router = router.route("/", post(create_placeholder));
+        router = router.route("/", post(create_entity_handler));
     }
     if entity.rest.allow_get_by_id {
-        router = router.route("/{id}", get(get_by_id_placeholder));
+        router = router.route("/{id}", get(get_entity_by_id_handler));
     }
     if entity.rest.allow_update {
-        router = router.route("/{id}", put(update_placeholder));
+        router = router.route("/{id}", put(update_entity_handler));
     }
     if entity.rest.allow_delete {
-        router = router.route("/{id}", delete(delete_placeholder));
+        router = router.route("/{id}", delete(delete_entity_handler));
     }
 
-    router
+    router.layer(Extension(entity))
 }
 
 async fn get_kdf_salt_handler(
@@ -170,16 +169,57 @@ async fn register_complete_handler(
     Ok(attach_cookies(result.payload, result.cookies))
 }
 
-async fn create_placeholder() -> impl IntoResponse {
-    placeholder_response("create", None)
+async fn create_entity_handler(
+    Extension(entity): Extension<EntityManifest>,
+    State(state): State<AdapterRuntimeState>,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let payload = require_object_body(body)?;
+    let created = entity_store::create_entity_record(
+        state.database.pool(),
+        state.manifest.as_ref(),
+        &entity,
+        &payload,
+    )
+    .await
+    .map_err(internal_server_error)?;
+
+    Ok((StatusCode::CREATED, Json(created)))
 }
 
-async fn delete_placeholder(Path(id): Path<String>) -> impl IntoResponse {
-    placeholder_response("delete", Some(id))
+async fn delete_entity_handler(
+    Extension(entity): Extension<EntityManifest>,
+    Path(id): Path<String>,
+    State(state): State<AdapterRuntimeState>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    entity_store::delete_entity_record(
+        state.database.pool(),
+        state.manifest.as_ref(),
+        &entity,
+        &id,
+    )
+    .await
+    .map_err(internal_server_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
-async fn get_by_id_placeholder(Path(id): Path<String>) -> impl IntoResponse {
-    placeholder_response("get-by-id", Some(id))
+async fn get_entity_by_id_handler(
+    Extension(entity): Extension<EntityManifest>,
+    Path(id): Path<String>,
+    State(state): State<AdapterRuntimeState>,
+) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
+    let record = entity_store::get_entity_record_by_id(
+        state.database.pool(),
+        state.manifest.as_ref(),
+        &entity,
+        &id,
+    )
+    .await
+    .map_err(internal_server_error)?
+    .unwrap_or(Value::Null);
+
+    Ok(Json(record))
 }
 
 async fn get_manifest(State(state): State<AdapterRuntimeState>) -> impl IntoResponse {
@@ -194,19 +234,19 @@ async fn health(State(state): State<AdapterRuntimeState>) -> impl IntoResponse {
     })
 }
 
-async fn list_placeholder() -> impl IntoResponse {
-    placeholder_response("list", None)
-}
-
-fn placeholder_response(operation: &str, id: Option<String>) -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(PlaceholderResponse {
-            entity: id,
-            message: "Generated REST routes are scaffolded but not implemented yet.",
-            operation: operation.to_owned(),
-        }),
+async fn list_entity_handler(
+    Extension(entity): Extension<EntityManifest>,
+    State(state): State<AdapterRuntimeState>,
+) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
+    let records = entity_store::list_entity_records(
+        state.database.pool(),
+        state.manifest.as_ref(),
+        &entity,
     )
+    .await
+    .map_err(internal_server_error)?;
+
+    Ok(Json(Value::Array(records)))
 }
 
 async fn runtime_summary(State(state): State<AdapterRuntimeState>) -> impl IntoResponse {
@@ -225,6 +265,69 @@ async fn runtime_summary(State(state): State<AdapterRuntimeState>) -> impl IntoR
     })
 }
 
-async fn update_placeholder(Path(id): Path<String>) -> impl IntoResponse {
-    placeholder_response("update", Some(id))
+async fn update_entity_handler(
+    Extension(entity): Extension<EntityManifest>,
+    Path(id): Path<String>,
+    State(state): State<AdapterRuntimeState>,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let payload = require_object_body(body)?;
+    let Some(updated) = entity_store::update_entity_record(
+        state.database.pool(),
+        state.manifest.as_ref(),
+        &entity,
+        &id,
+        &payload,
+    )
+    .await
+    .map_err(internal_server_error)? else {
+        return Err(not_found_error(format!(
+            "Entity '{}' with id '{}' was not found.",
+            entity.name, id
+        )));
+    };
+
+    Ok((StatusCode::OK, Json(updated)))
+}
+
+fn internal_server_error(error: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            message: error.to_string(),
+        }),
+    )
+}
+
+fn not_found_error(message: String) -> (StatusCode, Json<ErrorResponse>) {
+    (StatusCode::NOT_FOUND, Json(ErrorResponse { message }))
+}
+
+fn require_object_body(
+    value: Value,
+) -> Result<Map<String, Value>, (StatusCode, Json<ErrorResponse>)> {
+    value.as_object().cloned().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                message: "REST entity request body must be a JSON object.".to_owned(),
+            }),
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_object_body;
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    #[test]
+    fn require_object_body_rejects_non_objects() {
+        let result = require_object_body(json!("nope"));
+
+        assert!(result.is_err());
+        let (status, _) = result.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
 }
