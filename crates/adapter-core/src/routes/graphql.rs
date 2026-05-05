@@ -10,7 +10,7 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     auth::{get_kdf_salt, login, logout, refresh, register_begin, register_complete, AuthKeyBody, EmailBody},
-    manifest::EntityManifest,
+    db::entity_store,
     AdapterRuntimeState,
 };
 
@@ -152,81 +152,100 @@ async fn execute_graphql(
                 data: json!({ root_field: response.payload }),
             })
         }
-        _ => execute_entity_graphql(root_field, &variables, state.manifest.entities.as_slice()),
+        _ => execute_entity_graphql(&root_field, &variables, &state).await,
     }
 }
 
-fn execute_entity_graphql(
-    root_field: String,
+async fn execute_entity_graphql(
+    root_field: &str,
     variables: &Value,
-    entities: &[EntityManifest],
+    state: &AdapterRuntimeState,
 ) -> Result<GraphqlExecutionResult, String> {
-    for entity in entities {
-        if root_field == entity.graphql.list_query {
+    for entity in &state.manifest.entities {
+        if root_field == entity.graphql.list_query && entity.graphql.allow_list {
+            let records = entity_store::list_entity_records(
+                state.database.pool(),
+                state.manifest.as_ref(),
+                entity,
+            )
+            .await
+            .map_err(|error| format!("{error:#}"))?;
             return Ok(GraphqlExecutionResult {
                 cookies: Vec::new(),
-                data: json!({ root_field: [] }),
+                data: json!({ root_field: records }),
             });
         }
 
-        if root_field == entity.graphql.get_by_id_query {
+        if root_field == entity.graphql.get_by_id_query && entity.graphql.allow_get_by_id {
+            let id = required_id_variable(variables, "id")?;
+            let record = entity_store::get_entity_record_by_id(
+                state.database.pool(),
+                state.manifest.as_ref(),
+                entity,
+                &id,
+            )
+            .await
+            .map_err(|error| format!("{error:#}"))?;
             return Ok(GraphqlExecutionResult {
                 cookies: Vec::new(),
-                data: json!({ root_field: Value::Null }),
+                data: json!({ root_field: record }),
             });
         }
 
-        if root_field == entity.graphql.delete_mutation {
+        if root_field == entity.graphql.delete_mutation && entity.graphql.allow_delete {
+            let id = required_id_variable(variables, "id")?;
+            let deleted = entity_store::delete_entity_record(
+                state.database.pool(),
+                state.manifest.as_ref(),
+                entity,
+                &id,
+            )
+            .await
+            .map_err(|error| format!("{error:#}"))?;
             return Ok(GraphqlExecutionResult {
                 cookies: Vec::new(),
-                data: json!({ root_field: true }),
+                data: json!({ root_field: deleted }),
             });
         }
 
-        if root_field == entity.graphql.create_mutation {
-            let mut payload = required_object_variable(variables, "input")?;
-            ensure_entity_id_field(entity, &mut payload, None);
+        if root_field == entity.graphql.create_mutation && entity.graphql.allow_create {
+            let payload = required_object_variable(variables, "input")?;
+            let created = entity_store::create_entity_record(
+                state.database.pool(),
+                state.manifest.as_ref(),
+                entity,
+                &payload,
+            )
+            .await
+            .map_err(|error| format!("{error:#}"))?;
 
             return Ok(GraphqlExecutionResult {
                 cookies: Vec::new(),
-                data: json!({ root_field: Value::Object(payload) }),
+                data: json!({ root_field: created }),
             });
         }
 
-        if root_field == entity.graphql.update_mutation {
-            let mut payload = required_object_variable(variables, "input")?;
-            ensure_entity_id_field(entity, &mut payload, variables.get("id").cloned());
+        if root_field == entity.graphql.update_mutation && entity.graphql.allow_update {
+            let id = required_id_variable(variables, "id")?;
+            let payload = required_object_variable(variables, "input")?;
+            let updated = entity_store::update_entity_record(
+                state.database.pool(),
+                state.manifest.as_ref(),
+                entity,
+                &id,
+                &payload,
+            )
+            .await
+            .map_err(|error| format!("{error:#}"))?;
 
             return Ok(GraphqlExecutionResult {
                 cookies: Vec::new(),
-                data: json!({ root_field: Value::Object(payload) }),
+                data: json!({ root_field: updated }),
             });
         }
     }
 
     Err(format!("Unsupported GraphQL root field '{root_field}'."))
-}
-
-fn ensure_entity_id_field(
-    entity: &EntityManifest,
-    payload: &mut Map<String, Value>,
-    id_override: Option<Value>,
-) {
-    let Some(id_field_name) = entity
-        .fields
-        .iter()
-        .find(|field| field.entity_path == entity.id_path)
-        .map(|field| field.remote_path.clone())
-    else {
-        return;
-    };
-
-    if payload.contains_key(&id_field_name) {
-        return;
-    }
-
-    let id_value = id_override.unwrap_or_else(|| Value::String(uuid::Uuid::new_v4().to_string()));
-    payload.insert(id_field_name, id_value);
 }
 
 fn attach_graphql_response(
@@ -263,6 +282,24 @@ fn required_object_variable(variables: &Value, name: &str) -> Result<Map<String,
         .ok_or_else(|| format!("GraphQL variable '{name}' must be an object."))
 }
 
+fn required_id_variable(variables: &Value, name: &str) -> Result<String, String> {
+    let value = variables
+        .get(name)
+        .ok_or_else(|| format!("GraphQL variable '{name}' is required."))?;
+
+    if let Some(text) = value.as_str() {
+        return Ok(text.to_owned());
+    }
+    if let Some(number) = value.as_i64() {
+        return Ok(number.to_string());
+    }
+    if let Some(number) = value.as_u64() {
+        return Ok(number.to_string());
+    }
+
+    Err(format!("GraphQL variable '{name}' must be a string or integer."))
+}
+
 fn extract_root_field(query: &str) -> Option<String> {
     let start = query.find('{')?;
     let rest = &query[start + 1..];
@@ -286,9 +323,8 @@ fn extract_root_field(query: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_entity_id_field, extract_root_field};
-    use crate::manifest::{EntityFieldManifest, EntityGraphqlManifest, EntityManifest, EntityRestManifest};
-    use serde_json::{Map, Value};
+    use super::{extract_root_field, required_id_variable};
+    use serde_json::json;
 
     #[test]
     fn extracts_root_field_from_generated_query() {
@@ -297,48 +333,8 @@ mod tests {
     }
 
     #[test]
-    fn ensure_entity_id_field_backfills_missing_id() {
-        let entity = EntityManifest {
-            fields: vec![EntityFieldManifest {
-                encrypted: false,
-                entity_schema: None,
-                entity_path: "id".to_owned(),
-                entity_type: "string".to_owned(),
-                nullable: false,
-                optional: false,
-                remote_path: "id".to_owned(),
-                remote_schema: None,
-                remote_type: "string".to_owned(),
-                strategy_id: None,
-            }],
-            graphql: EntityGraphqlManifest {
-                allow_create: true,
-                allow_delete: true,
-                allow_get_by_id: true,
-                allow_list: true,
-                allow_update: true,
-                create_mutation: "createNote".to_owned(),
-                delete_mutation: "deleteNote".to_owned(),
-                get_by_id_query: "note".to_owned(),
-                list_query: "notes".to_owned(),
-                update_mutation: "updateNote".to_owned(),
-            },
-            id_path: "id".to_owned(),
-            name: "note".to_owned(),
-            rest: EntityRestManifest {
-                allow_create: true,
-                allow_delete: true,
-                allow_get_by_id: true,
-                allow_list: true,
-                allow_update: true,
-                base_path: "/notes".to_owned(),
-            },
-            table_name: "notes".to_owned(),
-        };
-        let mut payload = Map::new();
-
-        ensure_entity_id_field(&entity, &mut payload, Some(Value::String("abc".to_owned())));
-
-        assert_eq!(payload.get("id"), Some(&Value::String("abc".to_owned())));
+    fn required_id_variable_accepts_string_and_integer_values() {
+        assert_eq!(required_id_variable(&json!({ "id": "abc" }), "id").unwrap(), "abc");
+        assert_eq!(required_id_variable(&json!({ "id": 42 }), "id").unwrap(), "42");
     }
 }

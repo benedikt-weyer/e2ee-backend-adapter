@@ -1,3 +1,4 @@
+pub mod entity_store;
 pub mod postgres;
 
 use anyhow::Result;
