@@ -16,7 +16,7 @@ The current implementation bootstraps:
 
 ## Release
 
-The main `e2ee-backend-adapter` crate is versioned and published from this workspace for crates.io.
+Both `e2ee-backend-adapter` and `e2ee-backend-adapter-cli` are versioned and published from this workspace for crates.io.
 
 Compute the next version:
 
@@ -30,7 +30,7 @@ Update the workspace release version:
 bash ./scripts/set-version.sh 0.1.1
 ```
 
-Publish the crates.io package:
+Publish the crates.io packages:
 
 ```bash
 bash ./scripts/publish-crates.sh

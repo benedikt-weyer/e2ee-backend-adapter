@@ -38,6 +38,7 @@ fi
 
 packages=(
   e2ee-backend-adapter
+  e2ee-backend-adapter-cli
 )
 
 for package in "${packages[@]}"; do
