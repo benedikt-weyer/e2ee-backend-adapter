@@ -155,7 +155,7 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
         )?;
         writeln!(
             &mut output,
-            "    ) as EntitySchema<{}Entity, {}RemoteRecord, {}Id>,",
+            "    ) as unknown as EntitySchema<{}Entity, {}RemoteRecord, {}Id>,",
             alias_base,
             alias_base,
             alias_base,

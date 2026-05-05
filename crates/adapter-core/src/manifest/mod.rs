@@ -492,6 +492,7 @@ pub struct EntityFieldManifest {
     pub optional: bool,
     pub remote_path: String,
     pub remote_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub strategy_id: Option<String>,
 }
 
