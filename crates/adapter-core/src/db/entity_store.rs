@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{Map, Number, Value};
-use sqlx::{postgres::PgRow, types::Json, PgPool, Postgres, QueryBuilder, Row};
+use sqlx::{postgres::PgRow, types::Json, Execute, PgPool, Postgres, QueryBuilder, Row};
 
 use crate::manifest::{
     BackendAdapterManifest, EntityManifest, ExpectedEntityColumnManifest, ExpectedEntityTableManifest,
@@ -24,31 +24,18 @@ pub async fn create_entity_record(
         bail!("Create mutation for entity '{}' does not include any writable fields.", entity.name);
     }
 
-    let mut builder = QueryBuilder::<Postgres>::new("INSERT INTO ");
-    builder.push(mapping.quoted_table_name());
-    builder.push(" (");
-    {
-        let mut separated = builder.separated(", ");
-        for assignment in &assignments {
-            separated.push(mapping.quoted_column_name(&assignment.column.column_name));
-        }
-    }
-    builder.push(") VALUES (");
-    {
-        let mut separated = builder.separated(", ");
-        for assignment in &assignments {
-            push_assignment_value(&mut separated, assignment);
-        }
-    }
-    builder.push(") RETURNING ");
-    builder.push(mapping.cast_identifier_as_text(&mapping.primary_key.column_name, &mapping.primary_key.sql_type));
-    builder.push(" AS id");
-
-    let row = builder
-        .build()
+    let mut insert_builder = build_insert_query(&mapping, &assignments);
+    let query = insert_builder.build();
+    let insert_sql = query.sql().to_owned();
+    let row = query
         .fetch_one(pool)
         .await
-        .with_context(|| format!("Failed to insert entity '{}' into table '{}'.", entity.name, entity.table_name))?;
+        .with_context(|| {
+            format!(
+                "Failed to insert entity '{}' into table '{}'. SQL: {insert_sql}",
+                entity.name, entity.table_name
+            )
+        })?;
     let id = row
         .try_get::<String, _>("id")
         .context("Inserted row did not return a primary key.")?;
@@ -128,13 +115,13 @@ pub async fn update_entity_record(
     let mut builder = QueryBuilder::<Postgres>::new("UPDATE ");
     builder.push(mapping.quoted_table_name());
     builder.push(" SET ");
-    {
-        let mut separated = builder.separated(", ");
-        for assignment in &assignments {
-            separated.push(mapping.quoted_column_name(&assignment.column.column_name));
-            separated.push(" = ");
-            push_assignment_value(&mut separated, assignment);
+    for (index, assignment) in assignments.iter().enumerate() {
+        if index > 0 {
+            builder.push(", ");
         }
+        builder.push(mapping.quoted_column_name(&assignment.column.column_name));
+        builder.push(" = ");
+        push_assignment_value(&mut builder, assignment);
     }
     builder.push(" WHERE ");
     mapping.push_column_match(&mut builder, mapping.primary_key, id);
@@ -157,6 +144,36 @@ pub async fn update_entity_record(
     };
 
     mapping.get_by_id(pool, &updated_id, current_user_id).await
+}
+
+fn build_insert_query<'a>(
+    mapping: &EntitySqlMapping<'a>,
+    assignments: &[ColumnAssignment<'a>],
+) -> QueryBuilder<'a, Postgres> {
+    let mut builder = QueryBuilder::<Postgres>::new("INSERT INTO ");
+    builder.push(mapping.quoted_table_name());
+    builder.push(" (");
+    for (index, assignment) in assignments.iter().enumerate() {
+        if index > 0 {
+            builder.push(", ");
+        }
+        builder.push(mapping.quoted_column_name(&assignment.column.column_name));
+    }
+    builder.push(") VALUES (");
+    for (index, assignment) in assignments.iter().enumerate() {
+        if index > 0 {
+            builder.push(", ");
+        }
+        push_assignment_value(&mut builder, assignment);
+    }
+    builder.push(") RETURNING ");
+    builder.push(mapping.cast_identifier_as_text(
+        &mapping.primary_key.column_name,
+        &mapping.primary_key.sql_type,
+    ));
+    builder.push(" AS id");
+
+    builder
 }
 
 struct EntitySqlMapping<'a> {
@@ -248,9 +265,10 @@ impl<'a> EntitySqlMapping<'a> {
 
     fn cast_identifier_as_text(&self, column_name: &str, sql_type: &str) -> String {
         let identifier = self.quoted_column_name(column_name);
-        match sql_kind(sql_type) {
-            SqlKind::Text => identifier,
-            _ => format!("CAST({identifier} AS TEXT)"),
+        if sql_type.eq_ignore_ascii_case("TEXT") {
+            identifier
+        } else {
+            format!("CAST({identifier} AS TEXT)")
         }
     }
 
@@ -668,51 +686,48 @@ fn get_object_path<'a>(target: &'a Map<String, Value>, path: &str) -> Option<&'a
     target_at_path(target, path)
 }
 
-fn push_assignment_value(
-    separated: &mut sqlx::query_builder::Separated<'_, '_, Postgres, &str>,
-    assignment: &ColumnAssignment<'_>,
-) {
+fn push_assignment_value(builder: &mut QueryBuilder<'_, Postgres>, assignment: &ColumnAssignment<'_>) {
     match &assignment.value {
         AssignedColumnValue::Null => {
-            separated.push("NULL");
+            builder.push("NULL");
         }
         AssignedColumnValue::Bool(value) => {
-            separated.push("CAST(");
-            separated.push_bind(*value);
-            separated.push(" AS ");
-            separated.push(assignment.column.sql_type.as_str());
-            separated.push(")");
+            builder.push("CAST(");
+            builder.push_bind(*value);
+            builder.push(" AS ");
+            builder.push(assignment.column.sql_type.as_str());
+            builder.push(")");
         }
         AssignedColumnValue::Bytes(value) => {
-            separated.push_bind(value.clone());
+            builder.push_bind(value.clone());
         }
         AssignedColumnValue::Float(value) => {
-            separated.push("CAST(");
-            separated.push_bind(*value);
-            separated.push(" AS ");
-            separated.push(assignment.column.sql_type.as_str());
-            separated.push(")");
+            builder.push("CAST(");
+            builder.push_bind(*value);
+            builder.push(" AS ");
+            builder.push(assignment.column.sql_type.as_str());
+            builder.push(")");
         }
         AssignedColumnValue::Int(value) => {
-            separated.push("CAST(");
-            separated.push_bind(*value);
-            separated.push(" AS ");
-            separated.push(assignment.column.sql_type.as_str());
-            separated.push(")");
+            builder.push("CAST(");
+            builder.push_bind(*value);
+            builder.push(" AS ");
+            builder.push(assignment.column.sql_type.as_str());
+            builder.push(")");
         }
         AssignedColumnValue::Json(value) => {
-            separated.push("CAST(");
-            separated.push_bind(Json(value.clone()));
-            separated.push(" AS ");
-            separated.push(assignment.column.sql_type.as_str());
-            separated.push(")");
+            builder.push("CAST(");
+            builder.push_bind(Json(value.clone()));
+            builder.push(" AS ");
+            builder.push(assignment.column.sql_type.as_str());
+            builder.push(")");
         }
         AssignedColumnValue::Text(value) => {
-            separated.push("CAST(");
-            separated.push_bind(value.clone());
-            separated.push(" AS ");
-            separated.push(assignment.column.sql_type.as_str());
-            separated.push(")");
+            builder.push("CAST(");
+            builder.push_bind(value.clone());
+            builder.push(" AS ");
+            builder.push(assignment.column.sql_type.as_str());
+            builder.push(")");
         }
     }
 }
@@ -824,7 +839,10 @@ fn target_at_path<'a>(target: &'a Map<String, Value>, path: &str) -> Option<&'a 
 
 #[cfg(test)]
 mod tests {
-    use super::{encrypted_column_values, field_base_column_name, set_object_path, EntitySqlMapping};
+    use super::{
+        build_insert_query, encrypted_column_values, field_base_column_name, set_object_path,
+        EntitySqlMapping,
+    };
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
         EntityGraphqlManifest, EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest,
@@ -833,6 +851,7 @@ mod tests {
         RestAuthManifest, RestAuthPaths, SessionCookieNames, SessionManifest,
     };
     use serde_json::{json, Map, Value};
+    use sqlx::Execute;
 
     fn manifest_with_user_filtered_entity() -> (BackendAdapterManifest, EntityManifest) {
         let entity = EntityManifest {
@@ -1030,5 +1049,32 @@ mod tests {
         assert!(assignments
             .iter()
             .any(|assignment| assignment.column.column_name == "user_id"));
+    }
+
+    #[test]
+    fn build_insert_query_keeps_cast_expressions_intact() {
+        let (manifest, entity) = manifest_with_user_filtered_entity();
+        let mapping = EntitySqlMapping::new(&manifest, &entity).expect("mapping should build");
+        let mut assignments = mapping
+            .collect_assignments(
+                &Map::from_iter([
+                    (String::from("id"), Value::String("123e4567-e89b-12d3-a456-426614174000".to_owned())),
+                    (String::from("name"), Value::String("demo".to_owned())),
+                ]),
+                true,
+            )
+            .expect("assignments should collect");
+        mapping
+            .append_user_scope_assignment(
+                &mut assignments,
+                Some("123e4567-e89b-12d3-a456-426614174000"),
+            )
+            .expect("user_id should be injected");
+
+        let sql = build_insert_query(&mapping, &assignments).build().sql().to_owned();
+
+        assert!(sql.contains("CAST($1 AS TEXT)") || sql.contains("CAST($2 AS TEXT)"));
+        assert!(!sql.contains("CAST(,"));
+        assert!(!sql.contains(",  AS"));
     }
 }
