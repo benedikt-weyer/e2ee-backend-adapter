@@ -5,11 +5,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 
 use crate::manifest::{
-    AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
-    EntityGraphqlManifest, EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest,
-    ExpectedEntityTableManifest, ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
-    ExpectedSchemaEntityManifest, ExpectedSchemaGraphqlApiManifest, ExpectedSchemaManifest,
-    ExpectedSchemaRestApiManifest, RestAuthManifest, RestAuthPaths,
+    AuthManifest, BackendAdapterManifest, CustomOperationGraphqlManifest,
+    CustomOperationManifest, CustomOperationRestManifest, DatabaseManifest,
+    EntityFieldManifest, EntityGraphqlManifest, EntityManifest, EntityRestManifest,
+    ExpectedEntityColumnManifest, ExpectedEntityTableManifest, ExpectedSchemaApiManifest,
+    ExpectedSchemaCustomOperationApiManifest, ExpectedSchemaCustomOperationManifest,
+    ExpectedSchemaEntityApiManifest, ExpectedSchemaEntityManifest,
+    ExpectedSchemaGraphqlApiManifest, ExpectedSchemaManifest, ExpectedSchemaRestApiManifest,
+    RestAuthManifest, RestAuthPaths,
     SchemaAdditionalPropertiesManifest, SchemaDescriptorManifest, SchemaNodeManifest,
     SessionCookieNames, SessionManifest,
 };
@@ -127,6 +130,8 @@ pub struct EncryptedSchemaConfig {
     #[serde(default)]
     pub api: Option<BackendSchemaApiConfig>,
     #[serde(default)]
+    pub custom_operations: Vec<CustomOperationConfig>,
+    #[serde(default)]
     pub entity_api_overrides: Vec<EntityApiOverrideConfig>,
     #[serde(default)]
     pub encrypted_fields: Vec<EncryptedFieldConfig>,
@@ -149,6 +154,42 @@ pub struct EntityApiOverrideConfig {
     pub rest: Option<BackendSchemaEntityRestConfig>,
     #[serde(default)]
     pub table_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomOperationConfig {
+    #[serde(default)]
+    pub graphql: Option<BackendSchemaCustomOperationGraphqlConfig>,
+    pub name: String,
+    #[serde(default)]
+    pub request_schema: Option<SchemaConfigNode>,
+    #[serde(default)]
+    pub response_schema: Option<SchemaConfigNode>,
+    #[serde(default)]
+    pub rest: Option<BackendSchemaCustomOperationRestConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendSchemaCustomOperationGraphqlConfig {
+    #[serde(default)]
+    pub field_name: Option<String>,
+    #[serde(default)]
+    pub input_type_name: Option<String>,
+    #[serde(default)]
+    pub operation_type: Option<String>,
+    #[serde(default)]
+    pub selection_set: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendSchemaCustomOperationRestConfig {
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -304,11 +345,13 @@ pub fn manifest_from_db_schema_config(
 
     let manifest = BackendAdapterManifest {
         auth: default_auth_manifest(),
+        custom_operations: Vec::new(),
         database: DatabaseManifest {
             engine: "postgres".to_owned(),
             expected_schema: ExpectedSchemaManifest {
                 api: build_expected_schema_api(config.api.as_ref(), api),
                 auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                custom_operations: Vec::new(),
                 entities: expected_entities,
                 entity_tables,
             },
@@ -844,6 +887,20 @@ fn derived_rest_manifest(
     }
 }
 
+fn derived_custom_operation_rest_manifest(
+    operation_name: &str,
+    override_config: Option<&BackendSchemaCustomOperationRestConfig>,
+) -> CustomOperationRestManifest {
+    CustomOperationRestManifest {
+        method: override_config
+            .and_then(|rest| rest.method.clone())
+            .unwrap_or_else(|| "POST".to_owned()),
+        path: override_config
+            .and_then(|rest| rest.path.clone())
+            .unwrap_or_else(|| format!("/operations/{}", kebab_case(operation_name))),
+    }
+}
+
 fn derived_graphql_manifest(
     entity_name: &str,
     table_name: &str,
@@ -875,6 +932,87 @@ fn derived_graphql_manifest(
             .and_then(|graphql| graphql.update_mutation.clone())
             .unwrap_or_else(|| format!("update{pascal_name}")),
     }
+}
+
+fn derived_custom_operation_graphql_manifest(
+    operation_name: &str,
+    has_request_schema: bool,
+    overrides: Option<&BackendSchemaCustomOperationGraphqlConfig>,
+) -> CustomOperationGraphqlManifest {
+    let pascal_name = pascal_case(operation_name);
+
+    CustomOperationGraphqlManifest {
+        field_name: overrides
+            .and_then(|graphql| graphql.field_name.clone())
+            .unwrap_or_else(|| camel_case(operation_name)),
+        input_type_name: overrides
+            .and_then(|graphql| graphql.input_type_name.clone())
+            .or_else(|| has_request_schema.then(|| format!("{pascal_name}Input!"))),
+        operation_type: overrides
+            .and_then(|graphql| graphql.operation_type.clone())
+            .unwrap_or_else(|| "mutation".to_owned()),
+        selection_set: overrides.and_then(|graphql| graphql.selection_set.clone()),
+    }
+}
+
+fn append_custom_operation(
+    manifest: &mut BackendAdapterManifest,
+    operation: &CustomOperationConfig,
+    types: &BTreeMap<String, SchemaConfigNode>,
+    api: ExportApiKind,
+) -> Result<()> {
+    if operation.name.trim().is_empty() {
+        bail!("Custom operation name must not be empty.");
+    }
+
+    let mut request_resolution_path = Vec::new();
+    let request_schema = operation
+        .request_schema
+        .as_ref()
+        .map(|schema| resolve_schema_node(schema, types, &mut request_resolution_path))
+        .transpose()?;
+    let mut response_resolution_path = Vec::new();
+    let response_schema = operation
+        .response_schema
+        .as_ref()
+        .map(|schema| resolve_schema_node(schema, types, &mut response_resolution_path))
+        .transpose()?;
+    let graphql = derived_custom_operation_graphql_manifest(
+        &operation.name,
+        request_schema.is_some(),
+        operation.graphql.as_ref(),
+    );
+    let rest = derived_custom_operation_rest_manifest(&operation.name, operation.rest.as_ref());
+
+    manifest.custom_operations.push(CustomOperationManifest {
+        graphql: graphql.clone(),
+        name: operation.name.clone(),
+        request_schema: request_schema.clone(),
+        response_schema: response_schema.clone(),
+        rest: rest.clone(),
+    });
+
+    manifest.database.expected_schema.custom_operations.push(
+        ExpectedSchemaCustomOperationManifest {
+            api: match api {
+                ExportApiKind::Graphql => ExpectedSchemaCustomOperationApiManifest {
+                    graphql: Some(graphql),
+                    rest: None,
+                    api_type: "graphql".to_owned(),
+                },
+                ExportApiKind::Rest => ExpectedSchemaCustomOperationApiManifest {
+                    graphql: None,
+                    rest: Some(rest),
+                    api_type: "rest".to_owned(),
+                },
+            },
+            name: operation.name.clone(),
+            request_schema,
+            response_schema,
+        },
+    );
+
+    Ok(())
 }
 
 fn pascal_case(value: &str) -> String {
@@ -942,6 +1080,10 @@ pub fn apply_encrypted_schema_config(
 
     for override_config in &config.entity_api_overrides {
         update_entity_api_overrides(manifest, override_config, api)?;
+    }
+
+    for operation in &config.custom_operations {
+        append_custom_operation(manifest, operation, &config.types, api)?;
     }
 
     for mapping in &config.encrypted_fields {
@@ -1176,6 +1318,7 @@ mod tests {
                     session_duration_seconds: 600,
                 },
             },
+            custom_operations: vec![],
             database: DatabaseManifest {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
@@ -1189,6 +1332,7 @@ mod tests {
                         api_type: "rest".to_owned(),
                     },
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                        custom_operations: vec![],
                     entities: vec![ExpectedSchemaEntityManifest {
                         api: ExpectedSchemaEntityApiManifest {
                             graphql: None,
@@ -1378,6 +1522,58 @@ mod tests {
             .as_ref()
             .expect("rest config should exist")
             .authenticated);
+    }
+
+    #[test]
+    fn applies_custom_operations_from_encrypted_config() {
+        let mut manifest = manifest();
+        let config: EncryptedSchemaConfig = serde_json::from_str(
+            r#"{
+                "customOperations": [
+                    {
+                        "name": "gatewayStatus",
+                        "graphql": {
+                            "operationType": "query"
+                        },
+                        "requestSchema": {
+                            "schema": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "gatewayId": { "schema": { "type": "string" } }
+                                }
+                            }
+                        },
+                        "responseSchema": {
+                            "schema": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "ok": { "schema": { "type": "boolean" } }
+                                }
+                            }
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("config should parse");
+
+        apply_encrypted_schema_config(&mut manifest, &config, ExportApiKind::Graphql)
+            .expect("config should apply");
+
+        assert_eq!(manifest.custom_operations.len(), 1);
+        assert_eq!(manifest.custom_operations[0].rest.path, "/operations/gateway-status");
+        assert_eq!(manifest.custom_operations[0].graphql.field_name, "gatewayStatus");
+        assert_eq!(
+            manifest.database.expected_schema.custom_operations[0]
+                .api
+                .graphql
+                .as_ref()
+                .expect("graphql config should exist")
+                .operation_type,
+            "query"
+        );
     }
 
     #[test]

@@ -148,6 +148,8 @@ cannot infer.
 
 - `name`: backend/schema name used in generated outputs, in the DB schema file
 - `entities`: exported entities and their DB mapping, in the DB schema file
+- `customOperations`: optional non-entity REST/GraphQL operations, in the
+  encrypted schema file
 - `entityApiOverrides`: optional per-entity GraphQL or REST naming overrides, in
 	the encrypted schema file
 - `encryptedFields`: encrypted field logical type overrides, in the encrypted
@@ -170,6 +172,35 @@ Each encrypted field entry supports:
 The encrypted schema config can also include optional per-entity `graphql` or
 `rest` override blocks when the backend API names do not follow adapter
 conventions.
+
+### Custom Operations
+
+Use `customOperations` when you need generated frontend helpers for backend
+endpoints that are not CRUD operations on an exported entity.
+
+Each custom operation entry supports:
+
+- `name`: logical operation name used in generated TypeScript aliases and helper maps
+- `requestSchema`: optional schema node describing the input payload
+- `responseSchema`: optional schema node describing the returned payload
+- `rest`: optional REST metadata overrides
+- `graphql`: optional GraphQL metadata overrides
+
+REST defaults to `POST /operations/<kebab-case-name>`.
+
+GraphQL defaults to:
+
+- `fieldName`: camel-cased operation name
+- `operationType`: `mutation`
+- `inputTypeName`: `<PascalCaseName>Input!` when `requestSchema` is present
+
+If your GraphQL response shape cannot be converted into a selection set from the
+schema node alone, provide `graphql.selectionSet` explicitly in the encrypted
+schema config.
+
+These entries are exported into `expected-schema.json` and the generated
+TypeScript bindings, but you still register the actual backend handlers in your
+host application.
 
 ### Scaffolding From The Database
 
@@ -453,10 +484,12 @@ The generated TypeScript module exports:
 
 - `SessionUser`
 - `<EntityName>Entity`, `<EntityName>RemoteRecord`, and `<EntityName>Id` type aliases
+- `<OperationName>Request` and `<OperationName>Response` type aliases for custom operations
 - `createRestTransport(...)` and `createGraphqlTransport(...)`
 - `createRestAuthConfig(...)` and `createGraphqlAuthConfig(...)`
 - `createEntitySchemas(...)`
 - `createRestModels(...)` and `createGraphqlModels(...)`
+- `createRestCustomOperations(...)` and `createGraphqlCustomOperations(...)`
 - `createRestCrudAdapters(...)` and `createGraphqlCrudAdapters(...)`
 
 That lets a client app import typed auth and model helpers directly instead of

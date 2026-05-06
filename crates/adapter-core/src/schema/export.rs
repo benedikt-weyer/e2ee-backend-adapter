@@ -4,8 +4,9 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::manifest::{
-    BackendAdapterManifest, EntityFieldManifest, ExpectedSchemaManifest,
-    SchemaAdditionalPropertiesManifest, SchemaDescriptorManifest, SchemaNodeManifest,
+    BackendAdapterManifest, EntityFieldManifest, ExpectedSchemaCustomOperationManifest,
+    ExpectedSchemaManifest, SchemaAdditionalPropertiesManifest, SchemaDescriptorManifest,
+    SchemaNodeManifest,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -32,11 +33,13 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     writeln!(&mut output, "// Manifest: {}", manifest.name)?;
     writeln!(&mut output)?;
     writeln!(&mut output, "import {{")?;
+    writeln!(&mut output, "  createGraphqlCustomOperationFromExpectedSchemaOperation,")?;
     writeln!(&mut output, "  createGraphqlCrudAdapterFromExpectedSchemaEntity,")?;
     writeln!(&mut output, "  createGraphqlPasswordAuthConfigFromExpectedSchema,")?;
     writeln!(&mut output, "  createGraphqlTransportFromExpectedSchema,")?;
     writeln!(&mut output, "  createRestTransportFromExpectedSchema,")?;
     writeln!(&mut output, "  createEntitySchemaFromExpectedSchemaEntity,")?;
+    writeln!(&mut output, "  createRestCustomOperationFromExpectedSchemaOperation,")?;
     writeln!(&mut output, "  createRestCrudAdapterFromExpectedSchemaEntity,")?;
     writeln!(&mut output, "  createRestPasswordAuthConfig,")?;
     writeln!(&mut output, "  defineClientModel,")?;
@@ -77,6 +80,21 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
             typescript_object_type_for_fields(&entity.fields, true),
         )?;
         writeln!(&mut output, "export type {alias_base}Id = {};", resolve_id_type(entity))?;
+        writeln!(&mut output)?;
+    }
+
+    for operation in &manifest.database.expected_schema.custom_operations {
+        let alias_base = pascal_case(&operation.name);
+        writeln!(
+            &mut output,
+            "export type {alias_base}Request = {};",
+            typescript_custom_operation_request_type(operation),
+        )?;
+        writeln!(
+            &mut output,
+            "export type {alias_base}Response = {};",
+            typescript_custom_operation_response_type(operation),
+        )?;
         writeln!(&mut output)?;
     }
 
@@ -193,6 +211,31 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
             typescript_property_name(&entity.name),
             alias_base,
             alias_base,
+        )?;
+    }
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+
+    writeln!(&mut output, "export interface GeneratedRestCustomOperations {{")?;
+    for operation in &manifest.database.expected_schema.custom_operations {
+        let alias_base = pascal_case(&operation.name);
+        writeln!(
+            &mut output,
+            "  {}: {};",
+            typescript_property_name(&operation.name),
+            typescript_custom_operation_signature(&alias_base, operation),
+        )?;
+    }
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+    writeln!(&mut output, "export interface GeneratedGraphqlCustomOperations {{")?;
+    for operation in &manifest.database.expected_schema.custom_operations {
+        let alias_base = pascal_case(&operation.name);
+        writeln!(
+            &mut output,
+            "  {}: {};",
+            typescript_property_name(&operation.name),
+            typescript_custom_operation_signature(&alias_base, operation),
         )?;
     }
     writeln!(&mut output, "}}")?;
@@ -337,8 +380,79 @@ pub fn export_typescript_client_bindings(manifest: &BackendAdapterManifest) -> R
     }
     writeln!(&mut output, "  }};")?;
     writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+    writeln!(&mut output, "export function createRestCustomOperations(")?;
+    writeln!(&mut output, "  transport: RestTransport = createRestTransport(),")?;
+    writeln!(&mut output, "): GeneratedRestCustomOperations {{")?;
+    writeln!(&mut output, "  return {{")?;
+    for (index, operation) in manifest.database.expected_schema.custom_operations.iter().enumerate() {
+        let alias_base = pascal_case(&operation.name);
+        writeln!(
+            &mut output,
+            "    {}: createRestCustomOperationFromExpectedSchemaOperation<{}Request, {}Response>(",
+            typescript_property_name(&operation.name),
+            alias_base,
+            alias_base,
+        )?;
+        writeln!(&mut output, "      expectedSchema.customOperations?.[{index}]!,")?;
+        writeln!(&mut output, "      transport,")?;
+        writeln!(&mut output, "    ) as {},", typescript_custom_operation_signature(&alias_base, operation))?;
+    }
+    writeln!(&mut output, "  }};")?;
+    writeln!(&mut output, "}}")?;
+    writeln!(&mut output)?;
+    writeln!(&mut output, "export function createGraphqlCustomOperations(")?;
+    writeln!(&mut output, "  transport: GraphqlTransport = createGraphqlTransport(),")?;
+    writeln!(&mut output, "): GeneratedGraphqlCustomOperations {{")?;
+    writeln!(&mut output, "  return {{")?;
+    for (index, operation) in manifest.database.expected_schema.custom_operations.iter().enumerate() {
+        let alias_base = pascal_case(&operation.name);
+        writeln!(
+            &mut output,
+            "    {}: createGraphqlCustomOperationFromExpectedSchemaOperation<{}Request, {}Response>(",
+            typescript_property_name(&operation.name),
+            alias_base,
+            alias_base,
+        )?;
+        writeln!(&mut output, "      expectedSchema.customOperations?.[{index}]!,")?;
+        writeln!(&mut output, "      transport,")?;
+        writeln!(&mut output, "    ) as {},", typescript_custom_operation_signature(&alias_base, operation))?;
+    }
+    writeln!(&mut output, "  }};")?;
+    writeln!(&mut output, "}}")?;
 
     Ok(format!("{output}\n"))
+}
+
+fn typescript_custom_operation_request_type(
+    operation: &ExpectedSchemaCustomOperationManifest,
+) -> String {
+    operation
+        .request_schema
+        .as_ref()
+        .map(typescript_type_for_node)
+        .unwrap_or_else(|| "void".to_owned())
+}
+
+fn typescript_custom_operation_response_type(
+    operation: &ExpectedSchemaCustomOperationManifest,
+) -> String {
+    operation
+        .response_schema
+        .as_ref()
+        .map(typescript_type_for_node)
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn typescript_custom_operation_signature(
+    alias_base: &str,
+    operation: &ExpectedSchemaCustomOperationManifest,
+) -> String {
+    if operation.request_schema.is_some() {
+        format!("(input: {alias_base}Request) => Promise<{alias_base}Response>")
+    } else {
+        format!("() => Promise<{alias_base}Response>")
+    }
 }
 
 fn resolve_id_type(entity: &crate::manifest::ExpectedSchemaEntityManifest) -> String {
@@ -601,8 +715,9 @@ mod tests {
     use crate::manifest::{
         AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
         EntityGraphqlManifest, EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest,
-        ExpectedEntityTableManifest, ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
-        ExpectedSchemaRestApiManifest,
+        ExpectedEntityTableManifest, ExpectedSchemaApiManifest,
+        ExpectedSchemaCustomOperationApiManifest, ExpectedSchemaCustomOperationManifest,
+        ExpectedSchemaEntityApiManifest, ExpectedSchemaRestApiManifest,
         ExpectedSchemaEntityManifest, ExpectedSchemaManifest, RestAuthManifest,
         RestAuthPaths, SchemaDescriptorManifest, SessionCookieNames, SessionManifest,
     };
@@ -630,6 +745,7 @@ mod tests {
                     session_duration_seconds: 600,
                 },
             },
+            custom_operations: vec![],
             database: DatabaseManifest {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
@@ -643,6 +759,47 @@ mod tests {
                         api_type: "rest".to_owned(),
                     },
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                    custom_operations: vec![ExpectedSchemaCustomOperationManifest {
+                        api: ExpectedSchemaCustomOperationApiManifest {
+                            graphql: None,
+                            rest: Some(crate::manifest::CustomOperationRestManifest {
+                                method: "POST".to_owned(),
+                                path: "/operations/gateway-status".to_owned(),
+                            }),
+                            api_type: "rest".to_owned(),
+                        },
+                        name: "gatewayStatus".to_owned(),
+                        request_schema: Some(crate::manifest::SchemaNodeManifest {
+                            nullable: None,
+                            optional: None,
+                            schema: SchemaDescriptorManifest::Object {
+                                additional_properties: Some(crate::manifest::SchemaAdditionalPropertiesManifest::Boolean(false)),
+                                properties: Some(BTreeMap::from([(
+                                    "gatewayId".to_owned(),
+                                    crate::manifest::SchemaNodeManifest {
+                                        nullable: None,
+                                        optional: None,
+                                        schema: SchemaDescriptorManifest::String,
+                                    },
+                                )])),
+                            },
+                        }),
+                        response_schema: Some(crate::manifest::SchemaNodeManifest {
+                            nullable: None,
+                            optional: None,
+                            schema: SchemaDescriptorManifest::Object {
+                                additional_properties: Some(crate::manifest::SchemaAdditionalPropertiesManifest::Boolean(false)),
+                                properties: Some(BTreeMap::from([(
+                                    "ok".to_owned(),
+                                    crate::manifest::SchemaNodeManifest {
+                                        nullable: None,
+                                        optional: None,
+                                        schema: SchemaDescriptorManifest::Boolean,
+                                    },
+                                )])),
+                            },
+                        }),
+                    }],
                     entities: vec![ExpectedSchemaEntityManifest {
                         api: ExpectedSchemaEntityApiManifest {
                             graphql: None,
@@ -775,6 +932,7 @@ mod tests {
 
         assert!(json.contains("\"expectedSchema\""));
         assert!(json.contains("\"api\""));
+        assert!(json.contains("\"customOperations\""));
     }
 
     #[test]
@@ -790,8 +948,12 @@ mod tests {
         assert!(source.contains("export function createGraphqlTransport"));
         assert!(source.contains("export function createGraphqlAuthConfig"));
         assert!(source.contains("export function createEntitySchemas"));
+        assert!(source.contains("export type GatewayStatusRequest = { gatewayId: string }"));
+        assert!(source.contains("export type GatewayStatusResponse = { ok: boolean }"));
         assert!(source.contains("export function createRestModels"));
         assert!(source.contains("export function createGraphqlModels"));
+        assert!(source.contains("export function createRestCustomOperations"));
+        assert!(source.contains("export function createGraphqlCustomOperations"));
         assert!(source.contains("export function createRestCrudAdapters"));
         assert!(source.contains("export function createGraphqlCrudAdapters"));
         assert!(source.contains("createRestTransportFromExpectedSchema(expectedSchema, options)"));

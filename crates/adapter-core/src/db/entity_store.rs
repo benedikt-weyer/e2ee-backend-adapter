@@ -896,6 +896,7 @@ mod tests {
                     session_duration_seconds: 600,
                 },
             },
+            custom_operations: vec![],
             database: DatabaseManifest {
                 engine: "postgres".to_owned(),
                 expected_schema: ExpectedSchemaManifest {
@@ -909,6 +910,7 @@ mod tests {
                         api_type: "rest".to_owned(),
                     },
                     auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                        custom_operations: vec![],
                     entities: vec![ExpectedSchemaEntityManifest {
                         api: ExpectedSchemaEntityApiManifest {
                             graphql: None,

@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
         &args.database_url,
         AdapterRuntimeOptions {
             secure_cookies: args.secure_cookies,
+            ..AdapterRuntimeOptions::default()
         },
     )
     .await?;

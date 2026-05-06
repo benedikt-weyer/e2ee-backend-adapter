@@ -9,6 +9,8 @@ pub const MANIFEST_VERSION: u32 = 4;
 #[serde(rename_all = "camelCase")]
 pub struct BackendAdapterManifest {
     pub auth: AuthManifest,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_operations: Vec<CustomOperationManifest>,
     pub database: DatabaseManifest,
     pub entities: Vec<EntityManifest>,
     pub name: String,
@@ -36,6 +38,9 @@ impl BackendAdapterManifest {
 
         for entity in &self.entities {
             entity.validate()?;
+        }
+        for operation in &self.custom_operations {
+            operation.validate()?;
         }
 
         self.auth.validate()?;
@@ -168,6 +173,8 @@ impl DatabaseManifest {
 pub struct ExpectedSchemaManifest {
     pub api: ExpectedSchemaApiManifest,
     pub auth_tables: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_operations: Vec<ExpectedSchemaCustomOperationManifest>,
     pub entities: Vec<ExpectedSchemaEntityManifest>,
     pub entity_tables: Vec<ExpectedEntityTableManifest>,
 }
@@ -183,6 +190,9 @@ impl ExpectedSchemaManifest {
         }
         if self.entity_tables.is_empty() {
             bail!("Expected schema must define entity tables.");
+        }
+        for operation in &self.custom_operations {
+            operation.validate()?;
         }
         for entity in &self.entities {
             entity.validate()?;
@@ -212,6 +222,59 @@ impl ExpectedSchemaManifest {
             entity_table.validate()?;
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedSchemaCustomOperationManifest {
+    pub api: ExpectedSchemaCustomOperationApiManifest,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_schema: Option<SchemaNodeManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<SchemaNodeManifest>,
+}
+
+impl ExpectedSchemaCustomOperationManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            bail!("Expected schema custom operation name must not be empty.");
+        }
+
+        self.api.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedSchemaCustomOperationApiManifest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graphql: Option<CustomOperationGraphqlManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rest: Option<CustomOperationRestManifest>,
+    #[serde(rename = "type")]
+    pub api_type: String,
+}
+
+impl ExpectedSchemaCustomOperationApiManifest {
+    pub fn validate(&self) -> Result<()> {
+        match self.api_type.as_str() {
+            "graphql" => self
+                .graphql
+                .as_ref()
+                .ok_or_else(|| anyhow!("Expected schema custom operation GraphQL metadata is missing."))?
+                .validate(),
+            "rest" => self
+                .rest
+                .as_ref()
+                .ok_or_else(|| anyhow!("Expected schema custom operation REST metadata is missing."))?
+                .validate(),
+            _ => bail!(
+                "Unsupported custom operation API type '{}'.",
+                self.api_type
+            ),
+        }
     }
 }
 
@@ -458,6 +521,94 @@ impl EntityManifest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CustomOperationManifest {
+    pub graphql: CustomOperationGraphqlManifest,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_schema: Option<SchemaNodeManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<SchemaNodeManifest>,
+    pub rest: CustomOperationRestManifest,
+}
+
+impl CustomOperationManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            bail!("Custom operation name must not be empty.");
+        }
+
+        self.rest.validate()?;
+        self.graphql.validate()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomOperationGraphqlManifest {
+    pub field_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_type_name: Option<String>,
+    pub operation_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_set: Option<String>,
+}
+
+impl CustomOperationGraphqlManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.field_name.trim().is_empty() {
+            bail!("Custom operation GraphQL field name must not be empty.");
+        }
+        if !matches!(self.operation_type.as_str(), "mutation" | "query") {
+            bail!(
+                "Custom operation GraphQL operation type must be 'query' or 'mutation'."
+            );
+        }
+        if self
+            .input_type_name
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            bail!("Custom operation GraphQL input type name must not be empty when provided.");
+        }
+        if self
+            .selection_set
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            bail!("Custom operation GraphQL selection set must not be empty when provided.");
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomOperationRestManifest {
+    pub method: String,
+    pub path: String,
+}
+
+impl CustomOperationRestManifest {
+    pub fn validate(&self) -> Result<()> {
+        if !self.path.starts_with('/') {
+            bail!("Custom operation REST path must start with '/'.");
+        }
+        if !matches!(
+            self.method.as_str(),
+            "DELETE" | "GET" | "PATCH" | "POST" | "PUT"
+        ) {
+            bail!(
+                "Custom operation REST method must be one of DELETE, GET, PATCH, POST, or PUT."
+            );
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntityGraphqlManifest {
     pub allow_create: bool,
     pub allow_delete: bool,
@@ -679,6 +830,7 @@ mod tests {
                                         session_duration_seconds: 600,
                                 },
                         },
+                                custom_operations: vec![],
                         database: DatabaseManifest {
                                 engine: "postgres".to_owned(),
                                 expected_schema: ExpectedSchemaManifest {
@@ -695,6 +847,7 @@ mod tests {
                                             api_type: "rest".to_owned(),
                                         },
                                         auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                                        custom_operations: vec![],
                                 entities: vec![ExpectedSchemaEntityManifest {
                                     api: ExpectedSchemaEntityApiManifest {
                                         graphql: None,

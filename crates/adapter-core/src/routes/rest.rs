@@ -3,7 +3,7 @@ use axum::{
     http::HeaderMap,
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use serde::Serialize;
@@ -28,7 +28,7 @@ use crate::{
     },
     db::{entity_store, DatabaseBackend},
     manifest::{BackendAdapterManifest, EntityManifest},
-    AdapterRuntimeState,
+    AdapterRuntimeState, CustomRestRequest,
 };
 
 #[derive(Clone, Serialize)]
@@ -60,6 +60,7 @@ pub fn build_router(state: AdapterRuntimeState) -> Router {
         .route("/adapter/runtime", get(runtime_summary));
 
     router = add_auth_routes(router, manifest.as_ref());
+    router = add_custom_operation_routes(router, &state, manifest.as_ref());
 
     for entity in &manifest.entities {
         router = router.nest(&entity.rest.base_path, entity_router(entity.clone()));
@@ -76,6 +77,69 @@ fn add_auth_routes(router: Router<AdapterRuntimeState>, manifest: &BackendAdapte
     .route(&manifest.auth.rest.paths.refresh, post(refresh_handler))
     .route(&manifest.auth.rest.paths.register_begin, post(register_begin_handler))
     .route(&manifest.auth.rest.paths.register_complete, post(register_complete_handler))
+}
+
+fn add_custom_operation_routes(
+    mut router: Router<AdapterRuntimeState>,
+    state: &AdapterRuntimeState,
+    manifest: &BackendAdapterManifest,
+) -> Router<AdapterRuntimeState> {
+    for operation in &manifest.custom_operations {
+        if !state.custom_rest_handlers.contains_key(&operation.name) {
+            continue;
+        }
+
+        let operation_name = operation.name.clone();
+        router = match operation.rest.method.as_str() {
+            "DELETE" => router.route(
+                &operation.rest.path,
+                delete({
+                    let operation_name = operation_name.clone();
+                    move |headers, State(state), body| {
+                        execute_custom_rest_handler(headers, state, body, operation_name.clone())
+                    }
+                }),
+            ),
+            "GET" => router.route(
+                &operation.rest.path,
+                get({
+                    let operation_name = operation_name.clone();
+                    move |headers, State(state), body| {
+                        execute_custom_rest_handler(headers, state, body, operation_name.clone())
+                    }
+                }),
+            ),
+            "PATCH" => router.route(
+                &operation.rest.path,
+                patch({
+                    let operation_name = operation_name.clone();
+                    move |headers, State(state), body| {
+                        execute_custom_rest_handler(headers, state, body, operation_name.clone())
+                    }
+                }),
+            ),
+            "PUT" => router.route(
+                &operation.rest.path,
+                put({
+                    let operation_name = operation_name.clone();
+                    move |headers, State(state), body| {
+                        execute_custom_rest_handler(headers, state, body, operation_name.clone())
+                    }
+                }),
+            ),
+            _ => router.route(
+                &operation.rest.path,
+                post({
+                    let operation_name = operation_name.clone();
+                    move |headers, State(state), body| {
+                        execute_custom_rest_handler(headers, state, body, operation_name.clone())
+                    }
+                }),
+            ),
+        };
+    }
+
+    router
 }
 
 fn entity_router(entity: EntityManifest) -> Router<AdapterRuntimeState> {
@@ -168,6 +232,36 @@ async fn register_complete_handler(
     )
     .await?;
     Ok(attach_cookies(result.payload, result.cookies))
+}
+
+async fn execute_custom_rest_handler(
+    headers: HeaderMap,
+    state: AdapterRuntimeState,
+    body: Option<Json<Value>>,
+    operation_name: String,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let Some(handler) = state.custom_rest_handlers.get(&operation_name).cloned() else {
+        return Err(not_found_error(format!(
+            "Custom operation '{}' is not registered.",
+            operation_name
+        )));
+    };
+
+    let response = handler(CustomRestRequest {
+        headers,
+        input: body.map(|Json(value)| value),
+        operation_name,
+        state,
+    })
+    .await
+    .map_err(|message| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { message }),
+        )
+    })?;
+
+    Ok(attach_cookies(response.data, response.cookies))
 }
 
 async fn create_entity_handler(

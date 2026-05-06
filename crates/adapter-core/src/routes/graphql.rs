@@ -14,7 +14,7 @@ use crate::{
         register_complete, AuthKeyBody, EmailBody,
     },
     db::entity_store,
-    AdapterRuntimeState,
+    AdapterRuntimeState, CustomGraphqlRequest,
 };
 
 pub fn build_router(state: AdapterRuntimeState, endpoint_path: &str) -> Router {
@@ -155,8 +155,45 @@ async fn execute_graphql(
                 data: json!({ root_field: response.payload }),
             })
         }
-        _ => execute_entity_graphql(&headers, &root_field, &variables, &state).await,
+        _ => match execute_custom_graphql(&headers, &root_field, &variables, &state).await {
+            Some(result) => result,
+            None => execute_entity_graphql(&headers, &root_field, &variables, &state).await,
+        },
     }
+}
+
+async fn execute_custom_graphql(
+    headers: &HeaderMap,
+    root_field: &str,
+    variables: &Value,
+    state: &AdapterRuntimeState,
+) -> Option<Result<GraphqlExecutionResult, String>> {
+    let Some(operation_name) = state
+        .manifest
+        .custom_operations
+        .iter()
+        .find(|operation| operation.graphql.field_name == root_field)
+        .map(|operation| operation.name.clone())
+    else {
+        return None;
+    };
+    let Some(handler) = state.custom_graphql_handlers.get(&operation_name).cloned() else {
+        return None;
+    };
+
+    let response = handler(CustomGraphqlRequest {
+        headers: headers.clone(),
+        input: variables.get("input").cloned(),
+        operation_name,
+        state: state.clone(),
+        variables: variables.clone(),
+    })
+    .await;
+
+    Some(response.map(|response| GraphqlExecutionResult {
+        cookies: response.cookies,
+        data: json!({ root_field: response.data }),
+    }))
 }
 
 async fn execute_entity_graphql(
