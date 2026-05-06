@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
-    auth::{get_kdf_salt, login, logout, refresh, register_begin, register_complete, AuthKeyBody, EmailBody},
+    auth::{
+        authenticated_user_from_headers, get_kdf_salt, login, logout, refresh, register_begin,
+        register_complete, AuthKeyBody, EmailBody,
+    },
     db::entity_store,
     AdapterRuntimeState,
 };
@@ -152,15 +155,18 @@ async fn execute_graphql(
                 data: json!({ root_field: response.payload }),
             })
         }
-        _ => execute_entity_graphql(&root_field, &variables, &state).await,
+        _ => execute_entity_graphql(&headers, &root_field, &variables, &state).await,
     }
 }
 
 async fn execute_entity_graphql(
+    headers: &HeaderMap,
     root_field: &str,
     variables: &Value,
     state: &AdapterRuntimeState,
 ) -> Result<GraphqlExecutionResult, String> {
+    ensure_authenticated_entity_request(headers, state).await?;
+
     for entity in &state.manifest.entities {
         if root_field == entity.graphql.list_query && entity.graphql.allow_list {
             let records = entity_store::list_entity_records(
@@ -246,6 +252,37 @@ async fn execute_entity_graphql(
     }
 
     Err(format!("Unsupported GraphQL root field '{root_field}'."))
+}
+
+async fn ensure_authenticated_entity_request(
+    headers: &HeaderMap,
+    state: &AdapterRuntimeState,
+) -> Result<(), String> {
+    let requires_authentication = state
+        .manifest
+        .database
+        .expected_schema
+        .api
+        .graphql
+        .as_ref()
+        .is_some_and(|graphql| graphql.authenticated);
+    if !requires_authentication {
+        return Ok(());
+    }
+
+    let user = authenticated_user_from_headers(
+        headers,
+        state.database.pool(),
+        &state.manifest.auth.session,
+    )
+    .await
+    .map_err(|error| error.message().to_owned())?;
+
+    if user.is_some() {
+        Ok(())
+    } else {
+        Err("Authentication required.".to_owned())
+    }
 }
 
 fn attach_graphql_response(

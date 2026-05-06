@@ -101,11 +101,19 @@ impl AuthError {
         }
     }
 
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     pub fn not_found(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
             status: StatusCode::NOT_FOUND,
         }
+    }
+
+    pub fn status(&self) -> StatusCode {
+        self.status
     }
 }
 

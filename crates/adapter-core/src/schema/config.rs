@@ -23,8 +23,41 @@ pub enum ExportApiKind {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendDbSchemaConfig {
+    #[serde(default)]
+    pub api: Option<BackendSchemaApiConfig>,
     pub entities: Vec<BackendDbSchemaEntityConfig>,
     pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendSchemaApiConfig {
+    #[serde(default)]
+    pub graphql: Option<BackendSchemaGraphqlApiConfig>,
+    #[serde(default)]
+    pub rest: Option<BackendSchemaRestApiConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendSchemaGraphqlApiConfig {
+    #[serde(default)]
+    pub authenticated: Option<bool>,
+    #[serde(default)]
+    pub default_headers: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    pub endpoint_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendSchemaRestApiConfig {
+    #[serde(default)]
+    pub authenticated: Option<bool>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub default_headers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -87,6 +120,8 @@ pub struct BackendDbSchemaFieldConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EncryptedSchemaConfig {
+    #[serde(default)]
+    pub api: Option<BackendSchemaApiConfig>,
     #[serde(default)]
     pub entity_api_overrides: Vec<EntityApiOverrideConfig>,
     #[serde(default)]
@@ -262,30 +297,7 @@ pub fn manifest_from_db_schema_config(
         database: DatabaseManifest {
             engine: "postgres".to_owned(),
             expected_schema: ExpectedSchemaManifest {
-                api: match api {
-                    ExportApiKind::Graphql => ExpectedSchemaApiManifest {
-                        graphql: Some(ExpectedSchemaGraphqlApiManifest {
-                            default_headers: Some(BTreeMap::from([(
-                                "accept".to_owned(),
-                                "application/json".to_owned(),
-                            )])),
-                            endpoint_path: "/graphql".to_owned(),
-                        }),
-                        rest: None,
-                        api_type: "graphql".to_owned(),
-                    },
-                    ExportApiKind::Rest => ExpectedSchemaApiManifest {
-                        graphql: None,
-                        rest: Some(ExpectedSchemaRestApiManifest {
-                            base_url: "/api".to_owned(),
-                            default_headers: Some(BTreeMap::from([(
-                                "accept".to_owned(),
-                                "application/json".to_owned(),
-                            )])),
-                        }),
-                        api_type: "rest".to_owned(),
-                    },
-                },
+                api: build_expected_schema_api(config.api.as_ref(), api),
                 auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
                 entities: expected_entities,
                 entity_tables,
@@ -340,6 +352,7 @@ pub async fn scaffold_db_schema_config_from_database(
     }
 
     let config = BackendDbSchemaConfig {
+        api: None,
         entities,
         name: name.to_owned(),
     };
@@ -612,6 +625,61 @@ fn update_entity_api_overrides(
     Ok(())
 }
 
+fn update_api_overrides(
+    manifest: &mut BackendAdapterManifest,
+    config: &BackendSchemaApiConfig,
+    api: ExportApiKind,
+) -> Result<()> {
+    match api {
+        ExportApiKind::Graphql => {
+            let Some(graphql_config) = config.graphql.as_ref() else {
+                return Ok(());
+            };
+            let graphql = manifest
+                .database
+                .expected_schema
+                .api
+                .graphql
+                .as_mut()
+                .ok_or_else(|| anyhow!("GraphQL API metadata is missing from the manifest."))?;
+
+            if let Some(authenticated) = graphql_config.authenticated {
+                graphql.authenticated = authenticated;
+            }
+            if let Some(default_headers) = graphql_config.default_headers.as_ref() {
+                graphql.default_headers = Some(default_headers.clone());
+            }
+            if let Some(endpoint_path) = graphql_config.endpoint_path.as_ref() {
+                graphql.endpoint_path = endpoint_path.clone();
+            }
+        }
+        ExportApiKind::Rest => {
+            let Some(rest_config) = config.rest.as_ref() else {
+                return Ok(());
+            };
+            let rest = manifest
+                .database
+                .expected_schema
+                .api
+                .rest
+                .as_mut()
+                .ok_or_else(|| anyhow!("REST API metadata is missing from the manifest."))?;
+
+            if let Some(authenticated) = rest_config.authenticated {
+                rest.authenticated = authenticated;
+            }
+            if let Some(base_url) = rest_config.base_url.as_ref() {
+                rest.base_url = base_url.clone();
+            }
+            if let Some(default_headers) = rest_config.default_headers.as_ref() {
+                rest.default_headers = Some(default_headers.clone());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn update_encrypted_field_overrides(
     manifest: &mut BackendAdapterManifest,
     mapping: &EncryptedFieldConfig,
@@ -845,6 +913,10 @@ pub fn apply_encrypted_schema_config(
     config: &EncryptedSchemaConfig,
     api: ExportApiKind,
 ) -> Result<()> {
+    if let Some(api_config) = config.api.as_ref() {
+        update_api_overrides(manifest, api_config, api)?;
+    }
+
     for override_config in &config.entity_api_overrides {
         update_entity_api_overrides(manifest, override_config, api)?;
     }
@@ -854,6 +926,55 @@ pub fn apply_encrypted_schema_config(
     }
 
     Ok(())
+}
+
+fn build_expected_schema_api(
+    overrides: Option<&BackendSchemaApiConfig>,
+    api: ExportApiKind,
+) -> ExpectedSchemaApiManifest {
+    match api {
+        ExportApiKind::Graphql => {
+            let graphql = overrides.and_then(|value| value.graphql.as_ref());
+
+            ExpectedSchemaApiManifest {
+                graphql: Some(ExpectedSchemaGraphqlApiManifest {
+                    authenticated: graphql.and_then(|value| value.authenticated).unwrap_or(false),
+                    default_headers: Some(
+                        graphql
+                            .and_then(|value| value.default_headers.clone())
+                            .unwrap_or_else(default_schema_api_headers),
+                    ),
+                    endpoint_path: graphql
+                        .and_then(|value| value.endpoint_path.clone())
+                        .unwrap_or_else(|| "/graphql".to_owned()),
+                }),
+                rest: None,
+                api_type: "graphql".to_owned(),
+            }
+        }
+        ExportApiKind::Rest => {
+            let rest = overrides.and_then(|value| value.rest.as_ref());
+
+            ExpectedSchemaApiManifest {
+                graphql: None,
+                rest: Some(ExpectedSchemaRestApiManifest {
+                    authenticated: rest.and_then(|value| value.authenticated).unwrap_or(false),
+                    base_url: rest
+                        .and_then(|value| value.base_url.clone())
+                        .unwrap_or_else(|| "/api".to_owned()),
+                    default_headers: Some(
+                        rest.and_then(|value| value.default_headers.clone())
+                            .unwrap_or_else(default_schema_api_headers),
+                    ),
+                }),
+                api_type: "rest".to_owned(),
+            }
+        }
+    }
+}
+
+fn default_schema_api_headers() -> BTreeMap<String, String> {
+    BTreeMap::from([("accept".to_owned(), "application/json".to_owned())])
 }
 
 fn resolve_schema_node(
@@ -1038,6 +1159,7 @@ mod tests {
                     api: ExpectedSchemaApiManifest {
                         graphql: None,
                         rest: Some(ExpectedSchemaRestApiManifest {
+                            authenticated: false,
                             base_url: "/api".to_owned(),
                             default_headers: None,
                         }),
@@ -1168,39 +1290,66 @@ mod tests {
         ));
     }
 
-        #[test]
-        fn applies_entity_api_overrides_from_encrypted_config() {
-                let mut manifest = manifest();
-                let config: EncryptedSchemaConfig = serde_json::from_str(
-                        r#"{
-                            "entityApiOverrides": [
-                                {
-                                    "tableName": "integrations",
-                                    "graphql": {
-                                        "createMutation": "createIntegrationRecord",
-                                        "deleteMutation": "deleteIntegrationRecord",
-                                        "getByIdQuery": "integrationRecord",
-                                        "listQuery": "integrationRecords",
-                                        "updateMutation": "updateIntegrationRecord"
-                                    }
-                                }
-                            ]
-                        }"#,
-                )
-                .expect("config should parse");
+    #[test]
+    fn applies_entity_api_overrides_from_encrypted_config() {
+        let mut manifest = manifest();
+        let config: EncryptedSchemaConfig = serde_json::from_str(
+            r#"{
+                "entityApiOverrides": [
+                    {
+                        "tableName": "integrations",
+                        "graphql": {
+                            "createMutation": "createIntegrationRecord",
+                            "deleteMutation": "deleteIntegrationRecord",
+                            "getByIdQuery": "integrationRecord",
+                            "listQuery": "integrationRecords",
+                            "updateMutation": "updateIntegrationRecord"
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("config should parse");
 
-                apply_encrypted_schema_config(&mut manifest, &config, ExportApiKind::Graphql)
-                        .expect("config should apply");
+        apply_encrypted_schema_config(&mut manifest, &config, ExportApiKind::Graphql)
+            .expect("config should apply");
 
-                assert_eq!(
-                        manifest.database.expected_schema.entities[0]
-                                .api
-                                .graphql
-                                .as_ref()
-                                .expect("graphql config should exist")
-                                .create_mutation,
-                        "createIntegrationRecord"
-                );
-                assert_eq!(manifest.entities[0].graphql.list_query, "integrationRecords");
-        }
+        assert_eq!(
+            manifest.database.expected_schema.entities[0]
+                .api
+                .graphql
+                .as_ref()
+                .expect("graphql config should exist")
+                .create_mutation,
+            "createIntegrationRecord"
+        );
+        assert_eq!(manifest.entities[0].graphql.list_query, "integrationRecords");
+    }
+
+    #[test]
+    fn applies_api_authentication_overrides_from_encrypted_config() {
+        let mut manifest = manifest();
+        let config: EncryptedSchemaConfig = serde_json::from_str(
+            r#"{
+                "api": {
+                    "rest": {
+                        "authenticated": true
+                    }
+                }
+            }"#,
+        )
+        .expect("config should parse");
+
+        apply_encrypted_schema_config(&mut manifest, &config, ExportApiKind::Rest)
+            .expect("config should apply");
+
+        assert!(manifest
+            .database
+            .expected_schema
+            .api
+            .rest
+            .as_ref()
+            .expect("rest config should exist")
+            .authenticated);
+    }
 }

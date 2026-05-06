@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     auth::{
+        authenticated_user_from_headers,
         attach_cookies,
         get_kdf_salt,
         login,
@@ -170,10 +171,12 @@ async fn register_complete_handler(
 }
 
 async fn create_entity_handler(
+    headers: HeaderMap,
     Extension(entity): Extension<EntityManifest>,
     State(state): State<AdapterRuntimeState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    ensure_authenticated_entity_request(&headers, &state).await?;
     let payload = require_object_body(body)?;
     let created = entity_store::create_entity_record(
         state.database.pool(),
@@ -188,10 +191,12 @@ async fn create_entity_handler(
 }
 
 async fn delete_entity_handler(
+    headers: HeaderMap,
     Extension(entity): Extension<EntityManifest>,
     Path(id): Path<String>,
     State(state): State<AdapterRuntimeState>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    ensure_authenticated_entity_request(&headers, &state).await?;
     entity_store::delete_entity_record(
         state.database.pool(),
         state.manifest.as_ref(),
@@ -205,10 +210,12 @@ async fn delete_entity_handler(
 }
 
 async fn get_entity_by_id_handler(
+    headers: HeaderMap,
     Extension(entity): Extension<EntityManifest>,
     Path(id): Path<String>,
     State(state): State<AdapterRuntimeState>,
 ) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_authenticated_entity_request(&headers, &state).await?;
     let record = entity_store::get_entity_record_by_id(
         state.database.pool(),
         state.manifest.as_ref(),
@@ -235,9 +242,11 @@ async fn health(State(state): State<AdapterRuntimeState>) -> impl IntoResponse {
 }
 
 async fn list_entity_handler(
+    headers: HeaderMap,
     Extension(entity): Extension<EntityManifest>,
     State(state): State<AdapterRuntimeState>,
 ) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_authenticated_entity_request(&headers, &state).await?;
     let records = entity_store::list_entity_records(
         state.database.pool(),
         state.manifest.as_ref(),
@@ -266,11 +275,13 @@ async fn runtime_summary(State(state): State<AdapterRuntimeState>) -> impl IntoR
 }
 
 async fn update_entity_handler(
+    headers: HeaderMap,
     Extension(entity): Extension<EntityManifest>,
     Path(id): Path<String>,
     State(state): State<AdapterRuntimeState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    ensure_authenticated_entity_request(&headers, &state).await?;
     let payload = require_object_body(body)?;
     let Some(updated) = entity_store::update_entity_record(
         state.database.pool(),
@@ -299,8 +310,55 @@ fn internal_server_error(error: anyhow::Error) -> (StatusCode, Json<ErrorRespons
     )
 }
 
+async fn ensure_authenticated_entity_request(
+    headers: &HeaderMap,
+    state: &AdapterRuntimeState,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if !rest_entity_requests_require_authentication(state) {
+        return Ok(());
+    }
+
+    let user = authenticated_user_from_headers(
+        headers,
+        state.database.pool(),
+        &state.manifest.auth.session,
+    )
+    .await
+    .map_err(auth_error_response)?;
+
+    if user.is_some() {
+        Ok(())
+    } else {
+        Err(unauthorized_error("Authentication required.".to_owned()))
+    }
+}
+
+fn auth_error_response(error: AuthError) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        error.status(),
+        Json(ErrorResponse {
+            message: error.message().to_owned(),
+        }),
+    )
+}
+
 fn not_found_error(message: String) -> (StatusCode, Json<ErrorResponse>) {
     (StatusCode::NOT_FOUND, Json(ErrorResponse { message }))
+}
+
+fn rest_entity_requests_require_authentication(state: &AdapterRuntimeState) -> bool {
+    state
+        .manifest
+        .database
+        .expected_schema
+        .api
+        .rest
+        .as_ref()
+        .is_some_and(|rest| rest.authenticated)
+}
+
+fn unauthorized_error(message: String) -> (StatusCode, Json<ErrorResponse>) {
+    (StatusCode::UNAUTHORIZED, Json(ErrorResponse { message }))
 }
 
 fn require_object_body(
@@ -318,7 +376,7 @@ fn require_object_body(
 
 #[cfg(test)]
 mod tests {
-    use super::require_object_body;
+    use super::{require_object_body, unauthorized_error};
     use axum::http::StatusCode;
     use serde_json::json;
 
@@ -329,5 +387,12 @@ mod tests {
         assert!(result.is_err());
         let (status, _) = result.unwrap_err();
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn unauthorized_error_uses_http_401() {
+        let (status, _) = unauthorized_error("Authentication required.".to_owned());
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }

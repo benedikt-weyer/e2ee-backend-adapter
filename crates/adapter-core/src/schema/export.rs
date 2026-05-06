@@ -636,6 +636,7 @@ mod tests {
                     api: ExpectedSchemaApiManifest {
                         graphql: None,
                         rest: Some(ExpectedSchemaRestApiManifest {
+                            authenticated: false,
                             base_url: "/api".to_owned(),
                             default_headers: None,
                         }),

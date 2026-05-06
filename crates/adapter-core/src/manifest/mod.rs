@@ -229,6 +229,8 @@ impl ExpectedSchemaApiManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaGraphqlApiManifest {
+    #[serde(default)]
+    pub authenticated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_headers: Option<BTreeMap<String, String>>,
     pub endpoint_path: String,
@@ -247,6 +249,8 @@ impl ExpectedSchemaGraphqlApiManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaRestApiManifest {
+    #[serde(default)]
+    pub authenticated: bool,
     pub base_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_headers: Option<BTreeMap<String, String>>,
@@ -640,6 +644,7 @@ mod tests {
                                         api: ExpectedSchemaApiManifest {
                                             graphql: None,
                                             rest: Some(ExpectedSchemaRestApiManifest {
+                                                authenticated: false,
                                                 base_url: "/api".to_owned(),
                                                 default_headers: Some(BTreeMap::from([(
                                                     "accept".to_owned(),
