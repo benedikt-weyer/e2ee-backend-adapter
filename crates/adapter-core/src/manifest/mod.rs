@@ -186,6 +186,27 @@ impl ExpectedSchemaManifest {
         }
         for entity in &self.entities {
             entity.validate()?;
+            if entity.filter_by_user {
+                let table = self
+                    .entity_tables
+                    .iter()
+                    .find(|candidate| candidate.table_name == entity.table_name)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Expected schema entity '{}' is missing table metadata for '{}'.",
+                            entity.name,
+                            entity.table_name,
+                        )
+                    })?;
+
+                if !table.columns.iter().any(|column| column.column_name == "user_id") {
+                    bail!(
+                        "Expected schema entity '{}' enables filterByUser but table '{}' has no 'user_id' column.",
+                        entity.name,
+                        entity.table_name,
+                    );
+                }
+            }
         }
         for entity_table in &self.entity_tables {
             entity_table.validate()?;
@@ -334,9 +355,13 @@ impl ExpectedEntityTableManifest {
 #[serde(rename_all = "camelCase")]
 pub struct ExpectedSchemaEntityManifest {
     pub api: ExpectedSchemaEntityApiManifest,
+    #[serde(default)]
+    pub filter_by_user: bool,
     pub fields: Vec<EntityFieldManifest>,
     pub id_path: String,
     pub name: String,
+    #[serde(default)]
+    pub only_allow_authed_user_filter: bool,
     pub primary_key: String,
     pub table_name: String,
 }
@@ -353,6 +378,12 @@ impl ExpectedSchemaEntityManifest {
             bail!(
                 "Expected schema entity '{}' must define at least one field.",
                 self.name
+            );
+        }
+        if self.only_allow_authed_user_filter && !self.filter_by_user {
+            bail!(
+                "Expected schema entity '{}' cannot enable onlyAllowAuthedUserFilter without filterByUser.",
+                self.name,
             );
         }
         self.api.validate()
@@ -391,10 +422,14 @@ impl ExpectedSchemaEntityApiManifest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityManifest {
+    #[serde(default)]
+    pub filter_by_user: bool,
     pub fields: Vec<EntityFieldManifest>,
     pub graphql: EntityGraphqlManifest,
     pub id_path: String,
     pub name: String,
+    #[serde(default)]
+    pub only_allow_authed_user_filter: bool,
     pub rest: EntityRestManifest,
     pub table_name: String,
 }
@@ -409,6 +444,12 @@ impl EntityManifest {
         }
         if self.fields.is_empty() {
             bail!("Entity '{}' must define at least one field.", self.name);
+        }
+        if self.only_allow_authed_user_filter && !self.filter_by_user {
+            bail!(
+                "Entity '{}' cannot enable onlyAllowAuthedUserFilter without filterByUser.",
+                self.name,
+            );
         }
         self.rest.validate()?;
         self.graphql.validate()
@@ -667,6 +708,7 @@ mod tests {
                                         }),
                                         api_type: "rest".to_owned(),
                                     },
+                                    filter_by_user: false,
                                     fields: vec![EntityFieldManifest {
                                         encrypted: true,
                                         entity_schema: None,
@@ -681,6 +723,7 @@ mod tests {
                                     }],
                                     id_path: "id".to_owned(),
                                     name: "note".to_owned(),
+                                    only_allow_authed_user_filter: false,
                                     primary_key: "id".to_owned(),
                                     table_name: "notes".to_owned(),
                                 }],
@@ -703,6 +746,7 @@ mod tests {
                                 },
                         },
                         entities: vec![EntityManifest {
+                            filter_by_user: false,
                                 fields: vec![EntityFieldManifest {
                                         encrypted: true,
                                     entity_schema: None,
@@ -729,6 +773,7 @@ mod tests {
                                 },
                                 id_path: "id".to_owned(),
                                 name: "note".to_owned(),
+                                only_allow_authed_user_filter: false,
                                 rest: EntityRestManifest {
                                         allow_create: true,
                                         allow_delete: true,

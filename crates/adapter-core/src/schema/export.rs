@@ -656,6 +656,7 @@ mod tests {
                             }),
                             api_type: "rest".to_owned(),
                         },
+                        filter_by_user: false,
                         fields: vec![
                             EntityFieldManifest {
                                 encrypted: true,
@@ -696,6 +697,7 @@ mod tests {
                         ],
                         id_path: "id".to_owned(),
                         name: "note".to_owned(),
+                        only_allow_authed_user_filter: false,
                         primary_key: "id".to_owned(),
                         table_name: "notes".to_owned(),
                     }],
@@ -723,6 +725,7 @@ mod tests {
                 },
             },
             entities: vec![EntityManifest {
+                filter_by_user: false,
                 fields: vec![EntityFieldManifest {
                     encrypted: false,
                     entity_schema: None,
@@ -749,6 +752,7 @@ mod tests {
                 },
                 id_path: "id".to_owned(),
                 name: "note".to_owned(),
+                only_allow_authed_user_filter: false,
                 rest: EntityRestManifest {
                     allow_create: true,
                     allow_delete: true,

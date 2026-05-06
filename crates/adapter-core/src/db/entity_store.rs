@@ -8,15 +8,18 @@ use crate::manifest::{
 };
 
 const LEGACY_ENCRYPTION_ALGORITHM: &str = "aes-256-gcm";
+const USER_FILTER_COLUMN_NAME: &str = "user_id";
 
 pub async fn create_entity_record(
     pool: &PgPool,
     manifest: &BackendAdapterManifest,
     entity: &EntityManifest,
     input: &Map<String, Value>,
+    current_user_id: Option<&str>,
 ) -> Result<Value> {
     let mapping = EntitySqlMapping::new(manifest, entity)?;
-    let assignments = mapping.collect_assignments(input, true)?;
+    let mut assignments = mapping.collect_assignments(input, true)?;
+    mapping.append_user_scope_assignment(&mut assignments, current_user_id)?;
     if assignments.is_empty() {
         bail!("Create mutation for entity '{}' does not include any writable fields.", entity.name);
     }
@@ -50,7 +53,7 @@ pub async fn create_entity_record(
         .try_get::<String, _>("id")
         .context("Inserted row did not return a primary key.")?;
 
-    mapping.get_by_id(pool, &id).await?.ok_or_else(|| {
+    mapping.get_by_id(pool, &id, current_user_id).await?.ok_or_else(|| {
         anyhow!(
             "Entity '{}' was inserted but could not be reloaded from '{}'.",
             entity.name,
@@ -64,17 +67,19 @@ pub async fn delete_entity_record(
     manifest: &BackendAdapterManifest,
     entity: &EntityManifest,
     id: &str,
+    current_user_id: Option<&str>,
 ) -> Result<bool> {
     let mapping = EntitySqlMapping::new(manifest, entity)?;
-    let sql = format!(
-        "DELETE FROM {} WHERE {} = CAST($1 AS {})",
-        mapping.quoted_table_name(),
-        mapping.quoted_column_name(&mapping.primary_key.column_name),
-        mapping.primary_key.sql_type
-    );
+    let user_scope = mapping.resolve_user_scope(current_user_id)?;
 
-    let result = sqlx::query(&sql)
-        .bind(id)
+    let mut builder = QueryBuilder::<Postgres>::new("DELETE FROM ");
+    builder.push(mapping.quoted_table_name());
+    builder.push(" WHERE ");
+    mapping.push_column_match(&mut builder, mapping.primary_key, id);
+    mapping.push_user_scope_clause(&mut builder, user_scope.as_deref());
+
+    let result = builder
+        .build()
         .execute(pool)
         .await
         .with_context(|| format!("Failed to delete entity '{}' with id '{}'.", entity.name, id))?;
@@ -87,16 +92,22 @@ pub async fn get_entity_record_by_id(
     manifest: &BackendAdapterManifest,
     entity: &EntityManifest,
     id: &str,
+    current_user_id: Option<&str>,
 ) -> Result<Option<Value>> {
-    EntitySqlMapping::new(manifest, entity)?.get_by_id(pool, id).await
+    EntitySqlMapping::new(manifest, entity)?
+        .get_by_id(pool, id, current_user_id)
+        .await
 }
 
 pub async fn list_entity_records(
     pool: &PgPool,
     manifest: &BackendAdapterManifest,
     entity: &EntityManifest,
+    current_user_id: Option<&str>,
 ) -> Result<Vec<Value>> {
-    EntitySqlMapping::new(manifest, entity)?.list(pool).await
+    EntitySqlMapping::new(manifest, entity)?
+        .list(pool, current_user_id)
+        .await
 }
 
 pub async fn update_entity_record(
@@ -105,12 +116,14 @@ pub async fn update_entity_record(
     entity: &EntityManifest,
     id: &str,
     input: &Map<String, Value>,
+    current_user_id: Option<&str>,
 ) -> Result<Option<Value>> {
     let mapping = EntitySqlMapping::new(manifest, entity)?;
     let assignments = mapping.collect_assignments(input, false)?;
     if assignments.is_empty() {
-        return mapping.get_by_id(pool, id).await;
+        return mapping.get_by_id(pool, id, current_user_id).await;
     }
+    let user_scope = mapping.resolve_user_scope(current_user_id)?;
 
     let mut builder = QueryBuilder::<Postgres>::new("UPDATE ");
     builder.push(mapping.quoted_table_name());
@@ -124,12 +137,9 @@ pub async fn update_entity_record(
         }
     }
     builder.push(" WHERE ");
-    builder.push(mapping.quoted_column_name(&mapping.primary_key.column_name));
-    builder.push(" = CAST(");
-    builder.push_bind(id);
-    builder.push(" AS ");
-    builder.push(mapping.primary_key.sql_type.as_str());
-    builder.push(") RETURNING ");
+    mapping.push_column_match(&mut builder, mapping.primary_key, id);
+    mapping.push_user_scope_clause(&mut builder, user_scope.as_deref());
+    builder.push(" RETURNING ");
     builder.push(mapping.cast_identifier_as_text(&mapping.primary_key.column_name, &mapping.primary_key.sql_type));
     builder.push(" AS id");
 
@@ -146,7 +156,7 @@ pub async fn update_entity_record(
         return Ok(None);
     };
 
-    mapping.get_by_id(pool, &updated_id).await
+    mapping.get_by_id(pool, &updated_id, current_user_id).await
 }
 
 struct EntitySqlMapping<'a> {
@@ -154,6 +164,7 @@ struct EntitySqlMapping<'a> {
     fields: Vec<FieldColumnMapping<'a>>,
     primary_key: &'a ExpectedEntityColumnManifest,
     table: &'a ExpectedEntityTableManifest,
+    user_filter_column: Option<&'a ExpectedEntityColumnManifest>,
 }
 
 impl<'a> EntitySqlMapping<'a> {
@@ -170,6 +181,24 @@ impl<'a> EntitySqlMapping<'a> {
             .iter()
             .find(|candidate| candidate.column_name == table.primary_key)
             .ok_or_else(|| anyhow!("Primary key column '{}' is missing from '{}'.", table.primary_key, entity.table_name))?;
+        let user_filter_column = if entity.filter_by_user {
+            Some(
+                table
+                    .columns
+                    .iter()
+                    .find(|candidate| candidate.column_name == USER_FILTER_COLUMN_NAME)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Entity '{}' enables filterByUser but table '{}' has no '{}' column.",
+                            entity.name,
+                            entity.table_name,
+                            USER_FILTER_COLUMN_NAME,
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
 
         let mut fields = Vec::with_capacity(entity.fields.len());
         for field in &entity.fields {
@@ -213,6 +242,7 @@ impl<'a> EntitySqlMapping<'a> {
             fields,
             primary_key,
             table,
+            user_filter_column,
         })
     }
 
@@ -272,17 +302,107 @@ impl<'a> EntitySqlMapping<'a> {
         Ok(assignments)
     }
 
-    async fn get_by_id(&self, pool: &PgPool, id: &str) -> Result<Option<Value>> {
+    fn append_user_scope_assignment(
+        &self,
+        assignments: &mut Vec<ColumnAssignment<'a>>,
+        current_user_id: Option<&str>,
+    ) -> Result<()> {
+        let Some(user_id) = self.resolve_user_scope(current_user_id)? else {
+            return Ok(());
+        };
+        let Some(user_filter_column) = self.user_filter_column else {
+            return Ok(());
+        };
+
+        if assignments
+            .iter()
+            .any(|assignment| assignment.column.column_name == user_filter_column.column_name)
+        {
+            bail!(
+                "Entity '{}' manages '{}' automatically and does not accept it in payloads.",
+                self.entity.name,
+                USER_FILTER_COLUMN_NAME,
+            );
+        }
+
+        assignments.push(ColumnAssignment {
+            column: user_filter_column,
+            value: AssignedColumnValue::Text(user_id),
+        });
+
+        Ok(())
+    }
+
+    fn resolve_user_scope(&self, current_user_id: Option<&str>) -> Result<Option<String>> {
+        if !self.entity.filter_by_user {
+            return Ok(None);
+        }
+
+        match current_user_id {
+            Some(user_id) => Ok(Some(user_id.to_owned())),
+            None if self.entity.only_allow_authed_user_filter => bail!(
+                "Entity '{}' requires an authenticated user filter.",
+                self.entity.name,
+            ),
+            None => Ok(None),
+        }
+    }
+
+    fn push_column_match<'qb>(
+        &self,
+        builder: &mut QueryBuilder<'qb, Postgres>,
+        column: &ExpectedEntityColumnManifest,
+        value: &str,
+    ) {
+        builder.push(self.quoted_column_name(&column.column_name));
+        builder.push(" = CAST(");
+        builder.push_bind(value.to_owned());
+        builder.push(" AS ");
+        builder.push(column.sql_type.as_str());
+        builder.push(")");
+    }
+
+    fn push_user_scope_clause<'qb>(
+        &self,
+        builder: &mut QueryBuilder<'qb, Postgres>,
+        user_scope: Option<&str>,
+    ) {
+        let Some(user_id) = user_scope else {
+            return;
+        };
+        let Some(user_filter_column) = self.user_filter_column else {
+            return;
+        };
+
+        builder.push(" AND ");
+        self.push_column_match(builder, user_filter_column, user_id);
+    }
+
+    async fn get_by_id(&self, pool: &PgPool, id: &str, current_user_id: Option<&str>) -> Result<Option<Value>> {
+        let user_scope = self.resolve_user_scope(current_user_id)?;
         let sql = format!(
-            "SELECT {} FROM {} WHERE {} = CAST($1 AS {})",
+            "SELECT {} FROM {} WHERE {} = CAST($1 AS {}){}",
             self.select_columns_sql(),
             self.quoted_table_name(),
             self.quoted_column_name(&self.primary_key.column_name),
             self.primary_key.sql_type,
+            self
+                .user_filter_column
+                .zip(user_scope.as_ref())
+                .map(|(column, _)| format!(
+                    " AND {} = CAST($2 AS {})",
+                    self.quoted_column_name(&column.column_name),
+                    column.sql_type,
+                ))
+                .unwrap_or_default(),
         );
 
-        let row = sqlx::query(&sql)
-            .bind(id)
+        let mut query = sqlx::query(&sql).bind(id);
+        if let Some(user_id) = user_scope.as_deref() {
+            query = query.bind(user_id);
+        }
+
+        let row = query
             .fetch_optional(pool)
             .await
             .with_context(|| format!("Failed to load entity '{}' with id '{}'.", self.entity.name, id))?;
@@ -290,15 +410,30 @@ impl<'a> EntitySqlMapping<'a> {
         row.map(|value| self.row_to_remote(&value)).transpose()
     }
 
-    async fn list(&self, pool: &PgPool) -> Result<Vec<Value>> {
+    async fn list(&self, pool: &PgPool, current_user_id: Option<&str>) -> Result<Vec<Value>> {
+        let user_scope = self.resolve_user_scope(current_user_id)?;
         let sql = format!(
-            "SELECT {} FROM {} ORDER BY {}",
+            "SELECT {} FROM {}{} ORDER BY {}",
             self.select_columns_sql(),
             self.quoted_table_name(),
+            self
+                .user_filter_column
+                .zip(user_scope.as_ref())
+                .map(|(column, _)| format!(
+                    " WHERE {} = CAST($1 AS {})",
+                    self.quoted_column_name(&column.column_name),
+                    column.sql_type,
+                ))
+                .unwrap_or_default(),
             self.quoted_column_name(&self.primary_key.column_name),
         );
 
-        let rows = sqlx::query(&sql)
+        let mut query = sqlx::query(&sql);
+        if let Some(user_id) = user_scope.as_deref() {
+            query = query.bind(user_id);
+        }
+
+        let rows = query
             .fetch_all(pool)
             .await
             .with_context(|| format!("Failed to list entities for '{}'.", self.entity.name))?;
@@ -689,8 +824,136 @@ fn target_at_path<'a>(target: &'a Map<String, Value>, path: &str) -> Option<&'a 
 
 #[cfg(test)]
 mod tests {
-    use super::{encrypted_column_values, field_base_column_name, set_object_path};
+    use super::{encrypted_column_values, field_base_column_name, set_object_path, EntitySqlMapping};
+    use crate::manifest::{
+        AuthManifest, BackendAdapterManifest, DatabaseManifest, EntityFieldManifest,
+        EntityGraphqlManifest, EntityManifest, EntityRestManifest, ExpectedEntityColumnManifest,
+        ExpectedEntityTableManifest, ExpectedSchemaApiManifest, ExpectedSchemaEntityApiManifest,
+        ExpectedSchemaEntityManifest, ExpectedSchemaManifest, ExpectedSchemaRestApiManifest,
+        RestAuthManifest, RestAuthPaths, SessionCookieNames, SessionManifest,
+    };
     use serde_json::{json, Map, Value};
+
+    fn manifest_with_user_filtered_entity() -> (BackendAdapterManifest, EntityManifest) {
+        let entity = EntityManifest {
+            filter_by_user: true,
+            fields: vec![EntityFieldManifest {
+                encrypted: false,
+                entity_schema: None,
+                entity_path: "name".to_owned(),
+                entity_type: "string".to_owned(),
+                nullable: false,
+                optional: false,
+                remote_path: "name".to_owned(),
+                remote_schema: None,
+                remote_type: "string".to_owned(),
+                strategy_id: None,
+            }],
+            graphql: EntityGraphqlManifest {
+                allow_create: true,
+                allow_delete: true,
+                allow_get_by_id: true,
+                allow_list: true,
+                allow_update: true,
+                create_mutation: "createIntegration".to_owned(),
+                delete_mutation: "deleteIntegration".to_owned(),
+                get_by_id_query: "integration".to_owned(),
+                list_query: "integrations".to_owned(),
+                update_mutation: "updateIntegration".to_owned(),
+            },
+            id_path: "id".to_owned(),
+            name: "integration".to_owned(),
+            only_allow_authed_user_filter: true,
+            rest: EntityRestManifest {
+                allow_create: true,
+                allow_delete: true,
+                allow_get_by_id: true,
+                allow_list: true,
+                allow_update: true,
+                base_path: "/integrations".to_owned(),
+            },
+            table_name: "integrations".to_owned(),
+        };
+        let manifest = BackendAdapterManifest {
+            auth: AuthManifest {
+                mode: "password-session".to_owned(),
+                rest: RestAuthManifest {
+                    paths: RestAuthPaths {
+                        get_kdf_salt: "/auth/kdf-salt".to_owned(),
+                        login: "/auth/login".to_owned(),
+                        logout: "/auth/logout".to_owned(),
+                        refresh: "/auth/refresh".to_owned(),
+                        register_begin: "/auth/register-begin".to_owned(),
+                        register_complete: "/auth/register-complete".to_owned(),
+                    },
+                },
+                session: SessionManifest {
+                    cookie_names: SessionCookieNames {
+                        refresh: "refresh".to_owned(),
+                        session: "session".to_owned(),
+                    },
+                    refresh_duration_seconds: 3600,
+                    session_duration_seconds: 600,
+                },
+            },
+            database: DatabaseManifest {
+                engine: "postgres".to_owned(),
+                expected_schema: ExpectedSchemaManifest {
+                    api: ExpectedSchemaApiManifest {
+                        graphql: None,
+                        rest: Some(ExpectedSchemaRestApiManifest {
+                            authenticated: false,
+                            base_url: "/api".to_owned(),
+                            default_headers: None,
+                        }),
+                        api_type: "rest".to_owned(),
+                    },
+                    auth_tables: vec!["users".to_owned(), "sessions".to_owned()],
+                    entities: vec![ExpectedSchemaEntityManifest {
+                        api: ExpectedSchemaEntityApiManifest {
+                            graphql: None,
+                            rest: Some(entity.rest.clone()),
+                            api_type: "rest".to_owned(),
+                        },
+                        filter_by_user: true,
+                        fields: entity.fields.clone(),
+                        id_path: entity.id_path.clone(),
+                        name: entity.name.clone(),
+                        only_allow_authed_user_filter: true,
+                        primary_key: "id".to_owned(),
+                        table_name: entity.table_name.clone(),
+                    }],
+                    entity_tables: vec![ExpectedEntityTableManifest {
+                        columns: vec![
+                            ExpectedEntityColumnManifest {
+                                column_name: "id".to_owned(),
+                                nullable: false,
+                                sql_type: "UUID".to_owned(),
+                            },
+                            ExpectedEntityColumnManifest {
+                                column_name: "user_id".to_owned(),
+                                nullable: false,
+                                sql_type: "UUID".to_owned(),
+                            },
+                            ExpectedEntityColumnManifest {
+                                column_name: "name".to_owned(),
+                                nullable: false,
+                                sql_type: "TEXT".to_owned(),
+                            },
+                        ],
+                        primary_key: "id".to_owned(),
+                        table_name: "integrations".to_owned(),
+                    }],
+                },
+            },
+            entities: vec![entity.clone()],
+            name: "test".to_owned(),
+            realtime: None,
+            version: crate::manifest::MANIFEST_VERSION,
+        };
+
+        (manifest, entity)
+    }
 
     #[test]
     fn encrypted_column_values_convert_legacy_payload() {
@@ -728,5 +991,42 @@ mod tests {
             Value::Object(target),
             json!({ "configEnvelope": { "nonceBase64": "abc" } })
         );
+    }
+
+    #[test]
+    fn resolve_user_scope_requires_authenticated_user_when_configured() {
+        let (manifest, entity) = manifest_with_user_filtered_entity();
+        let mapping = EntitySqlMapping::new(&manifest, &entity).expect("mapping should build");
+
+        let error = mapping
+            .resolve_user_scope(None)
+            .expect_err("user scope should require auth");
+
+        assert!(error
+            .to_string()
+            .contains("requires an authenticated user filter"));
+    }
+
+    #[test]
+    fn append_user_scope_assignment_injects_user_id_column() {
+        let (manifest, entity) = manifest_with_user_filtered_entity();
+        let mapping = EntitySqlMapping::new(&manifest, &entity).expect("mapping should build");
+        let mut assignments = mapping
+            .collect_assignments(
+                &Map::from_iter([(String::from("name"), Value::String("demo".to_owned()))]),
+                true,
+            )
+            .expect("assignments should collect");
+
+        mapping
+            .append_user_scope_assignment(
+                &mut assignments,
+                Some("123e4567-e89b-12d3-a456-426614174000"),
+            )
+            .expect("user_id should be injected");
+
+        assert!(assignments
+            .iter()
+            .any(|assignment| assignment.column.column_name == "user_id"));
     }
 }

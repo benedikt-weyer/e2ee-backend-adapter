@@ -176,13 +176,14 @@ async fn create_entity_handler(
     State(state): State<AdapterRuntimeState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    ensure_authenticated_entity_request(&headers, &state).await?;
+    let current_user_id = resolve_entity_request_user_id(&headers, &state, &entity).await?;
     let payload = require_object_body(body)?;
     let created = entity_store::create_entity_record(
         state.database.pool(),
         state.manifest.as_ref(),
         &entity,
         &payload,
+        current_user_id.as_deref(),
     )
     .await
     .map_err(internal_server_error)?;
@@ -196,12 +197,13 @@ async fn delete_entity_handler(
     Path(id): Path<String>,
     State(state): State<AdapterRuntimeState>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    ensure_authenticated_entity_request(&headers, &state).await?;
+    let current_user_id = resolve_entity_request_user_id(&headers, &state, &entity).await?;
     entity_store::delete_entity_record(
         state.database.pool(),
         state.manifest.as_ref(),
         &entity,
         &id,
+        current_user_id.as_deref(),
     )
     .await
     .map_err(internal_server_error)?;
@@ -215,12 +217,13 @@ async fn get_entity_by_id_handler(
     Path(id): Path<String>,
     State(state): State<AdapterRuntimeState>,
 ) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
-    ensure_authenticated_entity_request(&headers, &state).await?;
+    let current_user_id = resolve_entity_request_user_id(&headers, &state, &entity).await?;
     let record = entity_store::get_entity_record_by_id(
         state.database.pool(),
         state.manifest.as_ref(),
         &entity,
         &id,
+        current_user_id.as_deref(),
     )
     .await
     .map_err(internal_server_error)?
@@ -246,11 +249,12 @@ async fn list_entity_handler(
     Extension(entity): Extension<EntityManifest>,
     State(state): State<AdapterRuntimeState>,
 ) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
-    ensure_authenticated_entity_request(&headers, &state).await?;
+    let current_user_id = resolve_entity_request_user_id(&headers, &state, &entity).await?;
     let records = entity_store::list_entity_records(
         state.database.pool(),
         state.manifest.as_ref(),
         &entity,
+        current_user_id.as_deref(),
     )
     .await
     .map_err(internal_server_error)?;
@@ -281,7 +285,7 @@ async fn update_entity_handler(
     State(state): State<AdapterRuntimeState>,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    ensure_authenticated_entity_request(&headers, &state).await?;
+    let current_user_id = resolve_entity_request_user_id(&headers, &state, &entity).await?;
     let payload = require_object_body(body)?;
     let Some(updated) = entity_store::update_entity_record(
         state.database.pool(),
@@ -289,6 +293,7 @@ async fn update_entity_handler(
         &entity,
         &id,
         &payload,
+        current_user_id.as_deref(),
     )
     .await
     .map_err(internal_server_error)? else {
@@ -313,8 +318,9 @@ fn internal_server_error(error: anyhow::Error) -> (StatusCode, Json<ErrorRespons
 async fn ensure_authenticated_entity_request(
     headers: &HeaderMap,
     state: &AdapterRuntimeState,
+    entity: &EntityManifest,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    if !rest_entity_requests_require_authentication(state) {
+    if !rest_entity_requests_require_authentication(state, entity) {
         return Ok(());
     }
 
@@ -333,6 +339,24 @@ async fn ensure_authenticated_entity_request(
     }
 }
 
+async fn resolve_entity_request_user_id(
+    headers: &HeaderMap,
+    state: &AdapterRuntimeState,
+    entity: &EntityManifest,
+) -> Result<Option<String>, (StatusCode, Json<ErrorResponse>)> {
+    ensure_authenticated_entity_request(headers, state, entity).await?;
+
+    let user = authenticated_user_from_headers(
+        headers,
+        state.database.pool(),
+        &state.manifest.auth.session,
+    )
+    .await
+    .map_err(auth_error_response)?;
+
+    Ok(user.map(|value| value.id))
+}
+
 fn auth_error_response(error: AuthError) -> (StatusCode, Json<ErrorResponse>) {
     (
         error.status(),
@@ -346,8 +370,11 @@ fn not_found_error(message: String) -> (StatusCode, Json<ErrorResponse>) {
     (StatusCode::NOT_FOUND, Json(ErrorResponse { message }))
 }
 
-fn rest_entity_requests_require_authentication(state: &AdapterRuntimeState) -> bool {
-    state
+fn rest_entity_requests_require_authentication(
+    state: &AdapterRuntimeState,
+    entity: &EntityManifest,
+) -> bool {
+    entity.only_allow_authed_user_filter || state
         .manifest
         .database
         .expected_schema

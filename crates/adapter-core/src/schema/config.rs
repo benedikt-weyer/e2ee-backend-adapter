@@ -65,8 +65,12 @@ pub struct BackendSchemaRestApiConfig {
 pub struct BackendDbSchemaEntityConfig {
     pub database: BackendDbSchemaEntityDatabaseConfig,
     pub fields: Vec<BackendDbSchemaFieldConfig>,
+    #[serde(default)]
+    pub filter_by_user: Option<bool>,
     pub id_path: String,
     pub name: String,
+    #[serde(default)]
+    pub only_allow_authed_user_filter: Option<bool>,
     pub table_name: String,
 }
 
@@ -136,7 +140,11 @@ pub struct EntityApiOverrideConfig {
     #[serde(default)]
     pub entity_name: Option<String>,
     #[serde(default)]
+    pub filter_by_user: Option<bool>,
+    #[serde(default)]
     pub graphql: Option<BackendSchemaEntityGraphqlConfig>,
+    #[serde(default)]
+    pub only_allow_authed_user_filter: Option<bool>,
     #[serde(default)]
     pub rest: Option<BackendSchemaEntityRestConfig>,
     #[serde(default)]
@@ -283,10 +291,12 @@ pub fn manifest_from_db_schema_config(
         .iter()
         .zip(entity_manifests.iter())
         .map(|(entity, fields)| EntityManifest {
+            filter_by_user: entity.filter_by_user.unwrap_or(false),
             fields: fields.clone(),
             graphql: derived_graphql_manifest(&entity.name, &entity.table_name, None),
             id_path: entity.id_path.clone(),
             name: entity.name.clone(),
+            only_allow_authed_user_filter: entity.only_allow_authed_user_filter.unwrap_or(false),
             rest: derived_rest_manifest(&entity.name, None),
             table_name: entity.table_name.clone(),
         })
@@ -455,8 +465,10 @@ fn scaffold_entity_config(
             primary_key: primary_key.to_owned(),
         },
         fields,
+        filter_by_user: None,
         id_path: camel_case(primary_key),
         name: singularize(table_name),
+        only_allow_authed_user_filter: None,
         table_name: table_name.to_owned(),
     }
 }
@@ -558,9 +570,11 @@ fn build_expected_schema_entity(
                 api_type: "rest".to_owned(),
             },
         },
+        filter_by_user: entity.filter_by_user.unwrap_or(false),
         fields,
         id_path: entity.id_path.clone(),
         name: entity.name.clone(),
+        only_allow_authed_user_filter: entity.only_allow_authed_user_filter.unwrap_or(false),
         primary_key: entity.database.primary_key.clone(),
         table_name: entity.table_name.clone(),
     }
@@ -620,6 +634,15 @@ fn update_entity_api_overrides(
         if api == ExportApiKind::Rest {
             expected_entity.api.rest = Some(derived_rest_manifest(&expected_entity.name, Some(rest)));
         }
+    }
+
+    if let Some(filter_by_user) = override_config.filter_by_user {
+        runtime_entity.filter_by_user = filter_by_user;
+        expected_entity.filter_by_user = filter_by_user;
+    }
+    if let Some(only_allow_authed_user_filter) = override_config.only_allow_authed_user_filter {
+        runtime_entity.only_allow_authed_user_filter = only_allow_authed_user_filter;
+        expected_entity.only_allow_authed_user_filter = only_allow_authed_user_filter;
     }
 
     Ok(())
@@ -1179,6 +1202,7 @@ mod tests {
                             }),
                             api_type: "rest".to_owned(),
                         },
+                        filter_by_user: false,
                         fields: vec![EntityFieldManifest {
                             encrypted: true,
                             entity_schema: None,
@@ -1193,6 +1217,7 @@ mod tests {
                         }],
                         id_path: "id".to_owned(),
                         name: "integration".to_owned(),
+                        only_allow_authed_user_filter: false,
                         primary_key: "id".to_owned(),
                         table_name: "integrations".to_owned(),
                     }],
@@ -1208,6 +1233,7 @@ mod tests {
                 },
             },
             entities: vec![EntityManifest {
+                filter_by_user: false,
                 fields: vec![EntityFieldManifest {
                     encrypted: true,
                     entity_schema: None,
@@ -1234,6 +1260,7 @@ mod tests {
                 },
                 id_path: "id".to_owned(),
                 name: "integration".to_owned(),
+                only_allow_authed_user_filter: false,
                 rest: EntityRestManifest {
                     allow_create: true,
                     allow_delete: true,
@@ -1351,5 +1378,30 @@ mod tests {
             .as_ref()
             .expect("rest config should exist")
             .authenticated);
+    }
+
+    #[test]
+    fn applies_entity_user_filter_overrides_from_encrypted_config() {
+        let mut manifest = manifest();
+        let config: EncryptedSchemaConfig = serde_json::from_str(
+            r#"{
+                "entityApiOverrides": [
+                    {
+                        "tableName": "integrations",
+                        "filterByUser": true,
+                        "onlyAllowAuthedUserFilter": true
+                    }
+                ]
+            }"#,
+        )
+        .expect("config should parse");
+
+        apply_encrypted_schema_config(&mut manifest, &config, ExportApiKind::Rest)
+            .expect("config should apply");
+
+        assert!(manifest.entities[0].filter_by_user);
+        assert!(manifest.entities[0].only_allow_authed_user_filter);
+        assert!(manifest.database.expected_schema.entities[0].filter_by_user);
+        assert!(manifest.database.expected_schema.entities[0].only_allow_authed_user_filter);
     }
 }

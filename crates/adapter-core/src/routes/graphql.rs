@@ -165,14 +165,14 @@ async fn execute_entity_graphql(
     variables: &Value,
     state: &AdapterRuntimeState,
 ) -> Result<GraphqlExecutionResult, String> {
-    ensure_authenticated_entity_request(headers, state).await?;
-
     for entity in &state.manifest.entities {
         if root_field == entity.graphql.list_query && entity.graphql.allow_list {
+            let current_user_id = resolve_entity_request_user_id(headers, state, entity).await?;
             let records = entity_store::list_entity_records(
                 state.database.pool(),
                 state.manifest.as_ref(),
                 entity,
+                current_user_id.as_deref(),
             )
             .await
             .map_err(|error| format!("{error:#}"))?;
@@ -183,12 +183,14 @@ async fn execute_entity_graphql(
         }
 
         if root_field == entity.graphql.get_by_id_query && entity.graphql.allow_get_by_id {
+            let current_user_id = resolve_entity_request_user_id(headers, state, entity).await?;
             let id = required_id_variable(variables, "id")?;
             let record = entity_store::get_entity_record_by_id(
                 state.database.pool(),
                 state.manifest.as_ref(),
                 entity,
                 &id,
+                current_user_id.as_deref(),
             )
             .await
             .map_err(|error| format!("{error:#}"))?;
@@ -199,12 +201,14 @@ async fn execute_entity_graphql(
         }
 
         if root_field == entity.graphql.delete_mutation && entity.graphql.allow_delete {
+            let current_user_id = resolve_entity_request_user_id(headers, state, entity).await?;
             let id = required_id_variable(variables, "id")?;
             let deleted = entity_store::delete_entity_record(
                 state.database.pool(),
                 state.manifest.as_ref(),
                 entity,
                 &id,
+                current_user_id.as_deref(),
             )
             .await
             .map_err(|error| format!("{error:#}"))?;
@@ -215,12 +219,14 @@ async fn execute_entity_graphql(
         }
 
         if root_field == entity.graphql.create_mutation && entity.graphql.allow_create {
+            let current_user_id = resolve_entity_request_user_id(headers, state, entity).await?;
             let payload = required_object_variable(variables, "input")?;
             let created = entity_store::create_entity_record(
                 state.database.pool(),
                 state.manifest.as_ref(),
                 entity,
                 &payload,
+                current_user_id.as_deref(),
             )
             .await
             .map_err(|error| format!("{error:#}"))?;
@@ -232,6 +238,7 @@ async fn execute_entity_graphql(
         }
 
         if root_field == entity.graphql.update_mutation && entity.graphql.allow_update {
+            let current_user_id = resolve_entity_request_user_id(headers, state, entity).await?;
             let id = required_id_variable(variables, "id")?;
             let payload = required_object_variable(variables, "input")?;
             let updated = entity_store::update_entity_record(
@@ -240,6 +247,7 @@ async fn execute_entity_graphql(
                 entity,
                 &id,
                 &payload,
+                current_user_id.as_deref(),
             )
             .await
             .map_err(|error| format!("{error:#}"))?;
@@ -257,8 +265,9 @@ async fn execute_entity_graphql(
 async fn ensure_authenticated_entity_request(
     headers: &HeaderMap,
     state: &AdapterRuntimeState,
+    entity: &crate::manifest::EntityManifest,
 ) -> Result<(), String> {
-    let requires_authentication = state
+    let requires_authentication = entity.only_allow_authed_user_filter || state
         .manifest
         .database
         .expected_schema
@@ -283,6 +292,24 @@ async fn ensure_authenticated_entity_request(
     } else {
         Err("Authentication required.".to_owned())
     }
+}
+
+async fn resolve_entity_request_user_id(
+    headers: &HeaderMap,
+    state: &AdapterRuntimeState,
+    entity: &crate::manifest::EntityManifest,
+) -> Result<Option<String>, String> {
+    ensure_authenticated_entity_request(headers, state, entity).await?;
+
+    let user = authenticated_user_from_headers(
+        headers,
+        state.database.pool(),
+        &state.manifest.auth.session,
+    )
+    .await
+    .map_err(|error| error.message().to_owned())?;
+
+    Ok(user.map(|value| value.id))
 }
 
 fn attach_graphql_response(
